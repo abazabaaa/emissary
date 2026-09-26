@@ -151,6 +151,59 @@ def cmd_demo(argv: Sequence[str]) -> int:
     return 1 if any(r["status"] in ("FAIL", "XPASS") for r in rows) else 0
 
 
+def cmd_materialize(argv: Sequence[str]) -> int:
+    """``materialize --scenario NAME --dest DIR [--no-sparse]`` writes a scenario tree to disk plus DIR.owners.tsv."""
+    from .walker import materialize
+
+    ap = argparse.ArgumentParser(prog="campaign_detector materialize", description=cmd_materialize.__doc__)
+    ap.add_argument("--scenario", required=True, help="scenario name (see synth --list)")
+    ap.add_argument("--dest", required=True, help="missing or empty directory; the inventory's / maps to it")
+    ap.add_argument("--no-sparse", action="store_true", help="write real bytes (files up to 64 MiB only)")
+    args = ap.parse_args(argv)
+    try:
+        inv = get(args.scenario).build()
+        man = materialize(inv, args.dest, sparse=not args.no_sparse)
+    except (KeyError, OSError, ValueError) as exc:
+        print(f"materialize: {exc}", file=sys.stderr)
+        return 1
+    apparent = sum(e.size for e in inv.files())
+    print(f"materialized {len(inv)} entries ({apparent:,} bytes apparent) under {man.dest}")
+    print(f"owners sidecar: {man.sidecar}")
+    print(f"walk it back: python -m campaign_detector walk --root {man.dest} --out OUT.tsv "
+          f"--map-root {man.dest}:/ --owners {man.sidecar}")
+    return 0
+
+
+def cmd_walk(argv: Sequence[str]) -> int:
+    """``walk --root DIR --out FILE.tsv [--map-root SRC:DST] [--hash] [--owners FILE]`` crawls a real tree."""
+    from .walker import walk_fs
+
+    ap = argparse.ArgumentParser(prog="campaign_detector walk", description=cmd_walk.__doc__)
+    ap.add_argument("--root", required=True, help="directory to crawl (symlinks are never followed below it)")
+    ap.add_argument("--out", required=True, help="output inventory TSV")
+    ap.add_argument("--map-root", metavar="SRC:DST", help="rewrite on-disk prefix SRC to inventory path DST")
+    ap.add_argument("--hash", action="store_true", help="sha256 every regular file (reads sparse files in full)")
+    ap.add_argument("--owners", help="owners sidecar TSV (from materialize) overriding uid/gid/ctime/sha256")
+    args = ap.parse_args(argv)
+    map_root = None
+    if args.map_root:
+        src, sep, dst = args.map_root.rpartition(":")
+        if not (sep and src and dst.startswith("/")):
+            ap.error("--map-root must look like SRC:DST with an absolute DST, e.g. /tmp/kdr_fs:/")
+        map_root = (src, dst)
+    try:
+        inv = walk_fs(args.root, map_root=map_root, hash=args.hash, owners=args.owners)
+        inv.to_tsv(args.out)
+    except (OSError, ValueError) as exc:
+        print(f"walk: {exc}", file=sys.stderr)
+        return 1
+    errors: list[str] = getattr(inv, "walk_errors", [])
+    for msg in errors:
+        print(f"walk: skipped {msg}", file=sys.stderr)
+    print(f"walked {len(inv)} entries into {args.out}" + (f" ({len(errors)} errors)" if errors else ""))
+    return 1 if errors else 0
+
+
 def _print_table(rows: list[dict[str, object]]) -> None:
     cols = ("scenario", "kind", "expected", "got", "status")
     widths = {c: max([len(c)] + [len(str(r[c])) for r in rows]) for c in cols}
@@ -174,6 +227,8 @@ SUBCOMMANDS: dict[str, Callable[[Sequence[str]], int]] = {
     "detect": cmd_detect,
     "features": cmd_features,
     "demo": cmd_demo,
+    "materialize": cmd_materialize,
+    "walk": cmd_walk,
 }
 """Subcommand name -> handler taking the remaining argv and returning an exit code."""
 
