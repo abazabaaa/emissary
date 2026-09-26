@@ -1,0 +1,10 @@
+== openjdk-8agents: OpenJDK 64-Bit Server VM (build 21.0.10+7-Ubuntu-124.04, mixed mode, sharing)
+  openjdk-8agents warm-up  1000 files in  14.80s  =   67.6 files/s   cpu   16.3s
+  openjdk-8agents run 1    1000 files in   5.40s  =  185.1 files/s   cpu    6.9s
+  openjdk-8agents run 2    1000 files in   3.92s  =  255.0 files/s   cpu    4.7s
+  openjdk-8agents run 3    1000 files in   3.58s  =  279.0 files/s   cpu    3.9s
+  openjdk-8agents run 4    1000 files in   3.55s  =  282.0 files/s   cpu    3.7s
+  openjdk-8agents run 5    1000 files in   3.61s  =  277.0 files/s   cpu    3.8s
+
+label       startup   files/s (mean of timed runs)   cpu s/run
+openjdk-8agents     4.5s      249.2                          4.6
