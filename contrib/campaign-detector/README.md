@@ -1,0 +1,241 @@
+# campaign-detector
+
+Prototype that reads a filesystem **inventory** (one row per file, directory or
+symlink: path, kind, size, mtime, ctime, uid, gid, inode, nlink, optional
+sha256, optional symlink target) of a long-lived CADD/cheminformatics archive
+and, without reading any file contents, answers three questions:
+
+1. **Did a molecular-dynamics campaign happen here?** Machine fingerprint:
+   many templated sibling directories (`run_lig001` ... `run_lig048`) each
+   holding the same topology/input/trajectory-chunks/restart/log/scheduler
+   files, chunks with evenly spaced mtimes at all hours from one uid, and
+   trajectories dominating the bytes.
+2. **Did a human curate the results?** An irregular directory with worded
+   names (`final`, `top10`, `forMedChem`, `v3`), small derived files (`.png`,
+   `.xlsx`, `.pptx`, `.ipynb`, `notes.txt`), written in working-hours bursts
+   after the campaign, often by a different uid.
+3. **Which candidates did the human pick?** Copies whose hash matches exactly
+   one run directory, hard links, symlinks into one run directory, derived
+   artifacts named after a candidate, and the candidate id reappearing later
+   elsewhere. Selection must be a *subset*: links to nearly every candidate
+   (mirror, symlink index, pipeline), boilerplate identical across candidates
+   and copies into `old`/`bak`/`trash` directories are not picks.
+
+Runtime is Python 3.11 standard library only; tests need `pytest`.
+
+## Running it
+
+```sh
+cd contrib/campaign-detector
+python3 -m pip install --user pytest   # or: pip install pytest
+python3 -m pytest -q
+python3 -m campaign_detector demo
+python3 -m campaign_detector synth --scenario positive_amber_basic.kdr_fep --out /tmp/kdr.tsv
+python3 -m campaign_detector detect --inventory /tmp/kdr.tsv
+python3 -m campaign_detector detect --inventory /tmp/kdr.tsv --json
+python3 -m campaign_detector features --inventory /tmp/kdr.tsv --out /tmp/kdr-features.tsv
+python3 -m campaign_detector synth --list
+```
+
+`demo` prints `scenario | kind | expected | got | status` for every
+registered scenario. Status is PASS/FAIL, or XFAIL/XPASS for scenarios with a
+`known_gap`; it exits 1 on any FAIL or XPASS (an XPASS means the gap closed:
+remove `known_gap`).
+
+## The grounded scenario
+
+`positive_amber_basic.kdr_fep`: an Amber relative-binding FEP campaign at
+`/vol3/projects/KDR_2011/fep`, submitted Monday 2011-03-14 by uid 2001 via
+`submit_all.sh`. 48 ligands `run_lig001`..`run_lig048`, of which lig017 and
+lig033 never ran (46 exist); each run has `complex.prmtop`, `prod.in` (shared
+boilerplate), 20 six-hourly 1.2 GB chunks `prod001.nc`..`prod020.nc` with
+per-chunk `prodNNN.out`, `prod.rst7` and `slurm-<jobid>.out`. Three weeks
+later uid 3002 works in `fep/analysis/` (`dG_summary_v3.xlsx`, `notes.txt`,
+`KDR_FEP_topHits_forMedChem.pptx`, `README.md`, three bursts) and picks:
+
+| candidate  | how                                                          |
+|------------|--------------------------------------------------------------|
+| run_lig012 | copy of `prod010.nc` renamed `analysis/lig012_bestpose.nc`   |
+| run_lig029 | derived plots `lig029_rmsd.png`, `lig029_stable.png`         |
+| run_lig041 | symlink `analysis/lig041_traj -> ../run_lig041/prod020.nc`   |
+
+`analysis/old/lig005_prod010.nc` is a copy of run_lig005 inside a tainted
+directory and must not count. Expected: exactly that campaign root; picked
+{012, 029, 041}; the other 43 not_picked; missing ids run_lig017, run_lig033.
+
+## Detection pipeline (`detect.detect`)
+
+1. **Featurize** every directory (`features.all_features`).
+2. **Campaign roots.** Directories are evaluated deepest first. `P`
+   qualifies when the largest group `G` of child dirs sharing a
+   `name_template` has at least `min_candidates` members, covers
+   `template_fraction` of the child dirs, has signature `uniformity` >= 0.75,
+   a modal signature with >= `min_md_classes` MD classes including TRAJ,
+   aggregate trajectory byte fraction >= 0.5 and uid purity >= 0.9 over G's
+   files (depth <= 2), and confidence
+   `0.3*uniformity + 0.2*classes/6 + 0.2*traj_frac + 0.15*regularity + 0.15*purity`
+   >= `campaign_conf`. When `P` qualifies, roots found inside its members are
+   discarded (a replica level such as `rep#` or `lambda_#.#` folds into its
+   candidate) unless at least half of the members hold a non-replica root:
+   then the members are campaigns in their own right (`batch1..batch4`) and
+   `P` is not a root. A root whose trajectory hashes are >= `copy_overlap`
+   later copies (by ctime) of another root's is a mirror/backup, not a
+   campaign; the original gets a note.
+3. **Taint.** A path with a `NEG_WORDS` token (`old`, `bak`, `trash`, ...)
+   in any component below its common ancestor with the campaign root is
+   never an evidence source or curated dir.
+4. **Curated dirs** (per campaign): untainted dirs outside every candidate
+   with >= 2 direct entries (files or symlinks) score one point each for an
+   approval word or version marker in their name or in ancestor names below
+   the campaign root's parent (the root's own name excluded), derived
+   fraction >= 0.5, working-hours fraction >= 0.6 of entries, all entries
+   newer than the last chunk, an owner other than the submitter, and an
+   irregular non-templated name with child-name diversity >= 0.5. Score >=
+   `curated_score` is curated.
+5. **Evidence** from the direct children of curated dirs: `hardlink` (1.0,
+   shared inode with nlink > 1 and equal size, mtime and uid) else
+   `copy_out` (1.0, sha256) when the file
+   matches files of exactly one candidate; `symlink` (1.0) when the resolved
+   target lies in exactly one candidate; `derived` (0.7) for a
+   `DERIVED_EXTS` file newer than the campaign whose `id_tokens` intersect the
+   candidate's; `graduation` (0.5) for an untainted dir outside every campaign
+   root, newer than the campaign, whose name carries the candidate id; then
+   the `Hooks` (their evidence must use a known kind, a candidate id of the
+   report and a normalized absolute `src`, else `ValueError`).
+6. **Coverage cap.** Per evidence kind, evidence units are "the files
+   directly in dir D" and "everything below dir D". Every minimal unit whose
+   distinct candidates reach `coverage_cap` of the campaign is dropped with a
+   note; if what remains of that kind still reaches the cap it is dropped too.
+7. **Labels.** Score = sum of weights; `picked` at >= `pick_threshold`,
+   `unknown` below; with no pick every candidate is `unknown`, otherwise
+   zero-evidence candidates are `not_picked`.
+   `selection_confidence = mean(max weight per pick) * (1 - picks/candidates)`;
+   below `selection_conf` all labels revert to `unknown` with a note.
+
+## Public API
+
+### `campaign_detector.inventory`
+
+- `KINDS` — entry kinds `("f", "d", "l")`.
+- `COLUMNS` — TSV column order and `Entry` field order.
+- `normalize_path(p)` — normalized absolute POSIX path; `ValueError` if relative.
+- `Entry(path, kind, size, mtime, ctime, uid, gid, inode, nlink, sha256=None, target=None)` — frozen row; properties `name`, `parent` (`None` for `/`), `stem`, `ext`; `resolved_target()`.
+- `Inventory(entries)` — strict collection (every entry but `/` needs its parent dir; no duplicates) with `by_path`, `by_sha`, `by_inode`, `children()`, `parent()`, `subtree()`, `dirs()`, `files()`, `links()`, iteration by path, `len`, `in`.
+- `Inventory.from_tsv(src)` / `Inventory.to_tsv(dst)` — TSV with header, UTF-8 + `surrogateescape`, empty cell = `None`.
+
+### `campaign_detector.features`
+
+- `T0`, `TZ_OFFSET_S`, `WORK_START_H`, `WORK_END_H` — integer time model constants (T0 = Monday 2020-09-07 UTC).
+- `local_hour(ts, off)`, `weekday(ts, off)`, `is_working_hours(ts, off)`, `era(ts)` — time model.
+- `at(day, hour, minute=0)`, `workday(k)` — synthetic calendar helpers (negative values go back in time).
+- `POS_WORDS`, `NEG_WORDS`, `REPLICA_WORDS`, `DERIVED_EXTS`, `MD_CLASSES`, `MD_CLASS_NAMES`, `SCHED_RE`, `ENGINE_EXTS` — vocabularies.
+- `tokens(name)`, `word_hits(name, words)`, `has_version_marker(name)`, `template_key(name)`, `is_templated(name)`, `id_tokens(name)`, `id_token(name)` — name analysis.
+- `classify_name(name)`, `classify(entry)` — MD class of a file.
+- `engine_vote(files)`, `dominant(values)`, `chunk_index(entry)`, `chunk_regularity(chunks)`, `count_bursts(mtimes)`, `files_within(inv, path, max_depth=2)`, `jaccard(a, b)` — building blocks.
+- `DirFeatures` — per-directory feature record (field docs in the class docstring).
+- `dir_features(inv, path, *, tz_offset_s=0)`, `all_features(inv, *, tz_offset_s=0)` — featurizer.
+- `sibling_uniformity(inv, feats, parent_path)` — `(group, uniformity, template_fraction, mode_sig)`.
+
+### `campaign_detector.synth`
+
+- `T0`, `at`, `workday` — re-exported time helpers.
+- `TreeBuilder(root="/vol1", *, uid=1000, gid=1000, mtime=T0)` — `dir()`, `file()`, `symlink()`, `copy()`, `hardlink()`, `build()`.
+- `CampaignSpec`, `ENGINE_PROFILES`, `md_campaign(tb, root, spec)` — MD campaign layout; returns candidate dir names.
+- `AnalysisSpec`, `human_analysis(tb, parent, spec)` — human analysis dir; returns its path.
+- `pick_by_copy(tb, campaign_root, dst_dir, cids, ...)`, `pick_by_symlink(tb, dst_dir, campaign_root, cids, ...)`, `pick_by_derived(tb, dst_dir, cids, ...)` — selection fingerprints (note the argument order differs; pass by keyword if unsure).
+- `ExpectedOutcome` with `no_campaign()`, `campaign_no_selection(root, cids=())`, `selection(root, picked, not_picked=(), unknown=(), rest=None)`.
+- `Scenario(name, kind, description, build, expected, known_gap=None)`, `compare(expected, result)`, `LABELS`.
+
+### `campaign_detector.detect`
+
+- `Params` — thresholds (see the dataclass for defaults).
+- `Evidence`, `Candidate`, `CuratedDir`, `CampaignReport` (`picked()`, `not_picked()`, `unknown()`), `DetectionResult` (`campaign_roots`, `to_dict()`).
+- `EVIDENCE_KINDS`, `EVIDENCE_WEIGHTS` — evidence vocabulary.
+- `Hooks(text_mentions=no_evidence, graduation=no_evidence)`, `EvidenceHook`, `no_evidence` — extension points.
+- `is_within(path, ancestor)`, `is_tainted(path, anchor="/")` — path predicates.
+- `detect(inv, *, params=None, hooks=None)` — run the pipeline.
+
+### `campaign_detector.scenarios` and `campaign_detector.cli`
+
+- `register(*, kind, description, expected, known_gap=None, name=None)`, `all_scenarios()`, `get(name)` — scenario registry.
+- `SUBCOMMANDS`, `main(argv=None)`, `format_report(report)`, `cmd_synth`, `cmd_detect`, `cmd_features`, `cmd_demo` — CLI.
+
+### Synthetic conventions worth knowing
+
+- Candidate ids are candidate **directory names** (`run_lig012`). Pick
+  helpers name files with `{cid}` (dir name) or `{id}` (its id token,
+  `lig012`): `pick_by_copy` default `rename="{id}_best.nc"`,
+  `pick_by_symlink` default `link_name="{id}_traj"` (relative target),
+  `pick_by_derived` writes `<id><suffix>`. The n-th item of one call gets
+  `mtime + 60*n`.
+- sha256 is `sha256(b"cd:" + content_id)`; `content_id` defaults to the
+  file's path, so `tb.file(..., content_id=...)` models a `cp -p` copy
+  (keep mtime, set a later `ctime`).
+- Directory mtimes are derived on `build()` from their newest child; inodes
+  count from 1000 in insertion order; `/` and every ancestor are emitted.
+- Chunk files are 1-based (`prod001.nc`), so `src_name="prod010.nc"` needs
+  `n_chunks >= 10`.
+
+## Writing scenarios (for other teams)
+
+- One module per group: `campaign_detector/scenarios/<kind>_<group>.py`
+  where kind is `positive` or `negative`. Never edit a sibling module or the
+  foundation modules; the registry discovers your module automatically.
+- Decorate zero-argument `build_<short>()` functions with `@register(kind=...,
+  description=..., expected=...)`; the scenario is named
+  `<module>.<short>` (override `<short>` with `name=`).
+- Express expectations with the `ExpectedOutcome` helpers:
+  `no_campaign()`, `campaign_no_selection(root)`, `selection(root, picked,
+  rest="not_picked")`. Negative scenarios must expect no picks; positive
+  scenarios must expect at least one.
+- If the detector gets a scenario wrong, keep the true expectation and set
+  `known_gap="<heuristic>: <why>"` with heuristic one of `campaign_root`,
+  `curated_dir`, `copy_out`, `hardlink`, `symlink`, `derived`, `graduation`,
+  `coverage_cap`, `uniqueness`, `negwords`, `labels`. Tests mark it
+  `xfail(strict=True)`; if it starts passing, remove the gap.
+- No randomness, no wall-clock time (use `at()`/`workday()`), fewer than
+  5,000 entries per scenario, stdlib only.
+- `tests/conftest.py` parametrizes `scenario` (xfail-marked) and
+  `declared_scenario` (unmarked) over every registered scenario.
+
+## Contract deviations
+
+- `word_hits` (used for `pos_word_score`, `neg_word_score` and taint) also
+  matches two adjacent tokens joined, so `forMedChem` hits `medchem` and
+  `BackUp` hits `backup`.
+- `engine` is a majority vote over *distinct* extensions (not file counts),
+  so ten `.dcd` chunks do not outvote Desmond's `.cms`/`.cfg`; ties go to
+  amber, gromacs, desmond, namd in that order.
+- Trajectory chunk series are grouped by (directory, name template);
+  `traj_chunk_regularity` is the mean over series with >= 3 chunks and
+  `traj_series_gap` is true if any series' distinct indices have a gap.
+- `derived` evidence matches when the file's `id_tokens` *intersect* the
+  candidate's (so `lig12_x.png` matches `run_lig012`).
+- A file that is a hard link of a candidate file yields `hardlink` evidence
+  only, not also `copy_out`.
+- The coverage cap drops minimal covering subtrees before the per-kind
+  global check (a superset of the per-directory rule that spares real picks
+  when a mirror is split into per-candidate subdirectories).
+- Added `Params.copy_overlap` and the mirror/backup gate in step 2.
+- Step 2 does not let an outer directory absorb member directories that
+  are campaigns in their own right (see the replica rule above).
+- Taint looks only at components below the path's common ancestor with the
+  campaign root, so campaigns under `/scratch` or `/tmp_projects` work.
+- Curated-dir gating counts symlinks as entries, and the working-hours,
+  newer-than-campaign and owner criteria use files and symlinks, so a
+  folder of symlinks to the chosen runs is curated. `CuratedDir.n_files`
+  is that entry count.
+- The approval-word check excludes the campaign root's own name (a root
+  called `fep_results` would otherwise vouch for every folder in it).
+- Hard-link evidence also requires equal size, mtime and uid, because the
+  inventory has no device column and inode numbers repeat across volumes.
+- `ExpectedOutcome` has two extra fields: `rest` (per-root label for
+  unlisted candidates, set by `selection(rest=...)`) and `present` (ids that
+  must be candidates, set by `campaign_no_selection(root, cids)`).
+- Pick helpers default to `{id}`-based names (`{id}_best.nc`, `{id}_traj`)
+  and accept `{cid}` as well.
+- `detect()` takes `params=None`/`hooks=None` meaning `Params()`/`Hooks()`.
+- `Params.chunk_regularity` is advisory: below it the report gets a note;
+  it does not gate the campaign.
+- `missing_ids` is empty when the id range is more than ten times the number
+  of candidates or the names differ outside their last digit run.
