@@ -1,0 +1,56 @@
+bundle.zip  (377 bytes)
+  FILETYPE=ZIP  MIME_TYPE=application/zip  DESCENDANT_COUNT=2  ZIP_ENTRIES_EXTRACTED=2
+  route: FILE_PICK_UP > UNIXFILE > TIKA_ID > UNZIP > TIKA_TEXT > DROP_OFF
+    bundle.zip-att-1  (105 bytes)
+      FILETYPE=TEXT  MIME_TYPE=text/plain  PARENT_FILETYPE=ZIP  ZIP_ENTRY_PATH=notes.txt  LANGUAGE=eng  TEXT_CHARS=104  TIKA_STATUS=OK
+      TEXT: meeting notes: the q3 contract with acme is due friday. follow up with legal about the indemnity clause.
+      route: FILE_PICK_UP > UNIXFILE > TIKA_ID > UNZIP > * > UNIXFILE > TIKA_ID > TIKA_TEXT > DROP_OFF
+    bundle.zip-att-2  (77 bytes)
+      FILETYPE=JSON_TEXT  MIME_TYPE=application/json  PARENT_FILETYPE=ZIP  ZIP_ENTRY_PATH=invoice.json  LANGUAGE=eng  TEXT_CHARS=76  TIKA_STATUS=OK
+      TEXT: {"customer":"Acme","invoice":"INV-2026-0042","amount":1200,"currency":"USD"}
+      route: FILE_PICK_UP > UNIXFILE > TIKA_ID > UNZIP > * > UNIXFILE > TIKA_ID > TIKA_TEXT > DROP_OFF
+
+invoice.json  (77 bytes)
+  FILETYPE=JSON_TEXT  MIME_TYPE=application/json  DESCENDANT_COUNT=0  LANGUAGE=eng  TEXT_CHARS=76  TIKA_STATUS=OK
+  TEXT: {"customer":"Acme","invoice":"INV-2026-0042","amount":1200,"currency":"USD"}
+  route: FILE_PICK_UP > UNIXFILE > TIKA_ID > TIKA_TEXT > DROP_OFF
+
+knight.png  (21836 bytes)
+  FILETYPE=PNG  DESCENDANT_COUNT=0  TEXT_CHARS=0  TIKA_STATUS=OK  OCR_STATUS=COMPLETE  OCR_PAGES=1  OCR_INPUT_TOKENS=1650  OCR_OUTPUT_TOKENS=48  OCR_MODEL=claude-opus-5 (LOCAL STUB)
+  OCR_TEXT: [STUB TRANSCRIPTION - not a real Claude response] | # SETTLEMENT AGREEMENT | Party A: Acme Corporation | Party B: Globex LLC | Amount: $250,000 | Sign...
+  route: FILE_PICK_UP > UNIXFILE > TIKA_TEXT > CLAUDE_OCR > DROP_OFF
+
+locked.zip  (240 bytes)
+  FILETYPE=ZIP  MIME_TYPE=application/zip  DESCENDANT_COUNT=0  ZIP_ENTRIES_EXTRACTED=0  ZIP_ENTRIES_ENCRYPTED=1
+  route: FILE_PICK_UP > UNIXFILE > TIKA_ID > UNZIP > TIKA_TEXT > DROP_OFF
+
+nested.zip  (1217 bytes)
+  FILETYPE=ZIP  MIME_TYPE=application/zip  DESCENDANT_COUNT=4  ZIP_ENTRIES_EXTRACTED=3
+  route: FILE_PICK_UP > UNIXFILE > TIKA_ID > UNZIP > TIKA_TEXT > DROP_OFF
+    nested.zip-att-1  (427 bytes)
+      FILETYPE=HTML  MIME_TYPE=text/html  PARENT_FILETYPE=ZIP  ZIP_ENTRY_PATH=review/vendor-review.html  TITLE=Q3 Vendor Review  AUTHOR=Sam Park  LANGUAGE=eng  TEXT_CHARS=253  TIKA_STATUS=OK
+      TEXT: Q3 Vendor Review   |  | # Q3 Vendor Review |  | Acme Corporation delivered 94% of orders on time this quarter. The contract renewal is due on Friday, ...
+      route: FILE_PICK_UP > UNIXFILE > TIKA_ID > UNZIP > * > UNIXFILE > TIKA_ID > TIKA_TEXT > DROP_OFF
+    nested.zip-att-2  (781 bytes)
+      FILETYPE=PDF  PARENT_FILETYPE=ZIP  ZIP_ENTRY_PATH=review/board-minutes.pdf  TITLE=Board Minutes  AUTHOR=Dana Reyes  PAGE_COUNT=1  LANGUAGE=eng  TEXT_CHARS=108  TIKA_STATUS=OK
+      TEXT: Board Minutes   |  | Minutes of the board meeting, 12 August 2026. The board approved the Acme contract renewal.
+      route: FILE_PICK_UP > UNIXFILE > TIKA_ID > UNZIP > * > UNIXFILE > TIKA_TEXT > CLAUDE_OCR > DROP_OFF
+    nested.zip-att-3  (217 bytes)
+      FILETYPE=ZIP  MIME_TYPE=application/zip  PARENT_FILETYPE=ZIP  ZIP_ENTRY_PATH=archive/older.zip  ZIP_ENTRIES_EXTRACTED=1
+      route: FILE_PICK_UP > UNIXFILE > TIKA_ID > UNZIP > * > UNIXFILE > TIKA_ID > UNZIP > TIKA_TEXT > DROP_OFF
+        nested.zip-att-3-att-1  (115 bytes)
+          FILETYPE=TEXT  MIME_TYPE=text/plain  PARENT_FILETYPE=ZIP  ZIP_ENTRY_PATH=memo-es.txt  LANGUAGE=spa  TEXT_CHARS=112  TIKA_STATUS=OK
+          TEXT: Memorando: la reunión con el proveedor se trasladó al jueves. Por favor confirme su asistencia antes del martes.
+          route: FILE_PICK_UP > UNIXFILE > TIKA_ID > UNZIP > * > UNIXFILE > TIKA_ID > UNZIP > * > UNIXFILE > TIKA_ID > TIKA_TEXT > DROP_OFF
+
+notes.txt  (105 bytes)
+  FILETYPE=TEXT  MIME_TYPE=text/plain  DESCENDANT_COUNT=0  LANGUAGE=eng  TEXT_CHARS=104  TIKA_STATUS=OK
+  TEXT: meeting notes: the q3 contract with acme is due friday. follow up with legal about the indemnity clause.
+  route: FILE_PICK_UP > UNIXFILE > TIKA_ID > TIKA_TEXT > DROP_OFF
+
+scanned-agreement.pdf  (38013 bytes)
+  FILETYPE=PDF  DESCENDANT_COUNT=0  PAGE_COUNT=1  TEXT_CHARS=0  TIKA_STATUS=OK  OCR_STATUS=COMPLETE  OCR_PAGES=1  OCR_INPUT_TOKENS=1650  OCR_OUTPUT_TOKENS=48  OCR_MODEL=claude-opus-5 (LOCAL STUB)
+  OCR_TEXT: [STUB TRANSCRIPTION - not a real Claude response] | # SETTLEMENT AGREEMENT | Party A: Acme Corporation | Party B: Globex LLC | Amount: $250,000 | Sign...
+  route: FILE_PICK_UP > UNIXFILE > TIKA_TEXT > CLAUDE_OCR > DROP_OFF
+
+7 families, 13 records

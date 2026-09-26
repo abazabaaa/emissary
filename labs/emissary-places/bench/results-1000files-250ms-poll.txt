@@ -1,0 +1,12 @@
+== openjdk: OpenJDK 64-Bit Server VM (build 21.0.10+7-Ubuntu-124.04, mixed mode, sharing)
+  openjdk    warm-up  1000 files in  15.19s  =   65.9 files/s   cpu   17.0s
+  openjdk    run 1    1000 files in   5.17s  =  193.6 files/s   cpu    7.6s
+  openjdk    run 2    1000 files in   3.81s  =  262.8 files/s   cpu    4.7s
+== graalvm: Java HotSpot(TM) 64-Bit Server VM Oracle GraalVM 21.0.12+7.1 (build 21.0.12+7-LTS-jvmci-23.1-b96, mixed mode, sharing)
+  graalvm    warm-up  1000 files in  14.95s  =   66.9 files/s   cpu   16.5s
+  graalvm    run 1    1000 files in   6.11s  =  163.7 files/s   cpu   10.4s
+  graalvm    run 2    1000 files in   4.43s  =  225.7 files/s   cpu    7.8s
+
+label       startup   files/s (mean of timed runs)   cpu s/run
+openjdk        4.3s      222.9                          6.1
+graalvm        4.8s      189.8                          9.1

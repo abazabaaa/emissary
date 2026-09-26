@@ -1,0 +1,781 @@
+<title>Emissary Code Atlas</title>
+<meta name="description" content="Interactive code, config and use-case graph of the Emissary workflow engine.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+:root{
+  --bg:#F2F4F3;--surface:#FFFFFF;--surface-2:#E8EDEB;--ink:#16201C;--muted:#58665F;--faint:#8A9791;--line:#D2DAD6;
+  --accent:#0C6A63;--accent-ink:#FFFFFF;--accent-soft:#D5EBE8;
+  --warn:#9A5B0B;--warn-soft:#F5E6CF;--bad:#A8352A;--bad-soft:#F5DCD8;--good:#2B7443;--good-soft:#DAEEDF;
+  --k-struct:#6D4FC2;--k-new:#C86B1F;--k-uses:#93A19B;--k-reflect:#BE3A76;--k-config:#2A7AB8;--k-wiring:#16907C;
+  --node:#FFFFFF;--node-line:#9AA8A2;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --cond:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0E1412;--surface:#151D1A;--surface-2:#1C2622;--ink:#E2EAE6;--muted:#9AA9A2;--faint:#6D7C75;--line:#28342F;
+  --accent:#4DB6AC;--accent-ink:#0B1311;--accent-soft:#15302C;
+  --warn:#E2A650;--warn-soft:#33260F;--bad:#EC7F71;--bad-soft:#3A1C18;--good:#6CCB8A;--good-soft:#16301F;
+  --k-struct:#A58BF0;--k-new:#EE9A52;--k-uses:#5F6E68;--k-reflect:#EE72A8;--k-config:#62AEE8;--k-wiring:#43C5AE;
+  --node:#1C2622;--node-line:#4B5A54;color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#0E1412;--surface:#151D1A;--surface-2:#1C2622;--ink:#E2EAE6;--muted:#9AA9A2;--faint:#6D7C75;--line:#28342F;
+  --accent:#4DB6AC;--accent-ink:#0B1311;--accent-soft:#15302C;
+  --warn:#E2A650;--warn-soft:#33260F;--bad:#EC7F71;--bad-soft:#3A1C18;--good:#6CCB8A;--good-soft:#16301F;
+  --k-struct:#A58BF0;--k-new:#EE9A52;--k-uses:#5F6E68;--k-reflect:#EE72A8;--k-config:#62AEE8;--k-wiring:#43C5AE;
+  --node:#1C2622;--node-line:#4B5A54;color-scheme:dark;}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans);margin:0}
+.wrap{max-width:1320px;margin:0 auto;padding-inline:20px;padding-block:0 48px}
+h1,h2,h3{font-family:var(--cond);text-wrap:balance;margin:0;letter-spacing:.005em}
+h1{font-size:26px;font-weight:700}
+h2{font-size:20px;font-weight:600}
+h3{font-size:15px;font-weight:600}
+p{margin:0}
+a{color:var(--accent)}
+code,.mono{font-family:var(--mono);font-size:12.5px}
+.muted{color:var(--muted)}
+.eyebrow{font:600 11px/1 var(--cond);letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--bg);border-bottom:1px solid var(--line)}
+.top-inner{max-width:1320px;margin:0 auto;padding-inline:20px;padding-block:14px 0;display:flex;flex-direction:column;gap:10px}
+.title-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px}
+.title-row .sub{color:var(--muted);font-size:13px}
+nav.tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
+nav.tabs button{font:600 13.5px var(--cond);letter-spacing:.02em;color:var(--muted);background:none;border:0;border-bottom:2px solid transparent;padding:8px 12px 10px;cursor:pointer;white-space:nowrap}
+nav.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+nav.tabs button:hover{color:var(--ink)}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+section.view{padding-block:22px 0;display:flex;flex-direction:column;gap:22px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.stat{background:var(--surface);padding:12px 14px;display:flex;flex-direction:column;gap:2px}
+.stat b{font:600 22px/1.1 var(--cond);font-variant-numeric:tabular-nums}
+.stat span{color:var(--muted);font-size:12px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:16px;min-width:0}
+.grid2{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:18px}
+.side{display:grid;grid-template-columns:260px minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:900px){.grid2,.side{grid-template-columns:1fr}}
+.takeaways{display:flex;flex-direction:column;gap:0}
+.takeaway{display:grid;grid-template-columns:6px minmax(0,1fr);gap:14px;padding-block:14px;border-top:1px solid var(--line)}
+.takeaway:first-child{border-top:0;padding-top:4px}
+.sev{border-radius:3px}
+.sev.bad{background:var(--bad)}.sev.warn{background:var(--warn)}.sev.info{background:var(--accent)}
+.takeaway h3{margin-bottom:4px}
+.takeaway p{color:var(--muted);max-width:78ch}
+.takeaway .go{font-size:13px;margin-top:6px;display:inline-block}
+.linkbtn{background:none;border:0;padding:0;color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.chip{display:inline-flex;align-items:center;gap:4px;font:500 11.5px/1 var(--sans);padding:4px 7px;border-radius:999px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
+.chip.good{background:var(--good-soft);color:var(--good)}.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.chip.bad{background:var(--bad-soft);color:var(--bad)}.chip.acc{background:var(--accent-soft);color:var(--accent)}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.list{display:flex;flex-direction:column}
+.uc-item{display:flex;flex-direction:column;gap:2px;text-align:left;background:none;border:0;border-left:2px solid transparent;padding:8px 10px;cursor:pointer;border-radius:0 6px 6px 0}
+.uc-item:hover{background:var(--surface-2)}
+.uc-item[aria-current="true"]{border-left-color:var(--accent);background:var(--accent-soft)}
+.uc-item b{font-weight:600;font-size:13.5px}
+.uc-item span{font-size:12px;color:var(--muted)}
+.group-label{margin:14px 10px 4px}
+.group-label:first-child{margin-top:0}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.step{display:grid;grid-template-columns:28px minmax(0,1fr);gap:10px}
+.step .num{font:600 12px var(--cond);color:var(--accent-ink);background:var(--accent);width:22px;height:22px;border-radius:50%;display:grid;place-items:center;margin-top:1px}
+.step .body{padding-bottom:6px;min-width:0}
+.step .cls{font-family:var(--mono);font-size:12.5px;word-break:break-all}
+.hop{grid-column:2;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11.5px;color:var(--faint);padding:0 0 10px}
+.hop .path{font-family:var(--mono);font-size:11px;color:var(--muted);word-break:break-all}
+.graph{height:520px;border:1px solid var(--line);border-radius:8px;background:var(--surface);position:relative;overflow:hidden}
+.graph.tall{height:640px}
+.graph .empty{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);padding:20px;text-align:center}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted)}
+.legend i{display:inline-block;width:18px;height:0;border-top:2px solid;vertical-align:middle;margin-right:5px}
+.legend i.dash{border-top-style:dashed}
+.controls{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;font-size:13px}
+.controls label{display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+.search{display:flex;gap:8px;flex-wrap:wrap}
+.search input{flex:1 1 280px;min-width:0;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font-family:var(--mono);font-size:13px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{border:0;background:var(--surface);padding:5px 10px;cursor:pointer;font-size:12.5px}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 14px;font-size:13px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;font-variant-numeric:tabular-nums;min-width:0;word-break:break-word}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 11px var(--cond);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--surface-2);position:sticky;top:0}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.bar{height:6px;border-radius:3px;background:var(--accent);min-width:2px}
+.bar.warn{background:var(--warn)}
+.clsbtn{font-family:var(--mono);font-size:12.5px;background:none;border:0;padding:0;color:var(--accent);cursor:pointer;text-align:left;word-break:break-all}
+.clsbtn:hover{text-decoration:underline}
+.detail{display:flex;flex-direction:column;gap:14px}
+.detail .doc{color:var(--muted);font-style:italic}
+.scroll-list{max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:3px;padding-right:4px}
+.note{font-size:12.5px;color:var(--muted);max-width:90ch}
+.section-head{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;justify-content:space-between}
+.fold summary{cursor:pointer;font:600 15px var(--cond);padding-block:4px}
+.fold{border-top:1px solid var(--line);padding-top:12px}
+.two-col{columns:2 260px;column-gap:24px}
+.two-col>*{break-inside:avoid}
+.callout{border:1px solid var(--line);border-left:3px solid var(--warn);background:var(--surface);border-radius:6px;padding:10px 12px;font-size:13px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<header class="top">
+  <div class="top-inner">
+    <div class="title-row">
+      <h1>Emissary Code Atlas</h1>
+      <span class="sub" id="subline"></span>
+    </div>
+    <nav class="tabs" role="tablist" id="tabs">
+      <button role="tab" data-view="overview">Overview</button>
+      <button role="tab" data-view="usecases">Use cases</button>
+      <button role="tab" data-view="architecture">Architecture</button>
+      <button role="tab" data-view="classes">Classes</button>
+      <button role="tab" data-view="routing">Routing</button>
+      <button role="tab" data-view="findings">Findings</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+<!-- OVERVIEW -->
+<section class="view" id="view-overview">
+  <div class="stats" id="stats"></div>
+  <div class="grid2">
+    <div class="panel">
+      <div class="section-head"><h2>What the graph says</h2><span class="eyebrow">Key takeaways</span></div>
+      <div class="takeaways" id="takeaways" style="margin-top:10px"></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+      <div class="panel">
+        <h2>How Emissary is used</h2>
+        <p class="muted" style="margin-top:6px">Twelve use cases, each traced through real classes. Hops between steps are checked against the graph.</p>
+        <div class="list" id="ov-usecases" style="margin-top:10px"></div>
+      </div>
+      <div class="panel">
+        <h2>How this was built</h2>
+        <dl class="kv" style="margin-top:10px">
+          <dt>Code</dt><dd>tree-sitter Java ASTs: extends, implements, <code>new</code>, type use, class-name string literals</dd>
+          <dt>Wiring</dt><dd>Jersey package scanning, <code>META-INF/services</code></dd>
+          <dt>Config</dt><dd><code>.cfg</code> files: class names, <code>places.cfg</code> deployments, routing keys; plus logback and other resources</dd>
+          <dt>Tests</dt><dd>Which test classes reference each main class</dd>
+          <dt>History</dt><dd id="hist-line"></dd>
+        </dl>
+        <p class="note" style="margin-top:10px">Static analysis can't see classes named only in a deployment's own config, so "unreferenced" means "not referenced in this repository", not "safe to delete".</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- USE CASES -->
+<section class="view" id="view-usecases" hidden>
+  <div class="side">
+    <div class="panel" style="padding:10px 6px"><div class="list" id="uc-list"></div></div>
+    <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+      <div class="panel" id="uc-head"></div>
+      <div class="grid2">
+        <div class="panel"><h3>Flow</h3><ol class="steps" id="uc-steps" style="margin-top:12px"></ol></div>
+        <div class="panel detail" id="uc-evidence"></div>
+      </div>
+      <div class="section-head">
+        <h3>Classes involved</h3>
+        <div class="controls">
+          <div class="seg" id="uc-depth"><button data-d="1" aria-pressed="true">1 hop</button><button data-d="2" aria-pressed="false">2 hops</button></div>
+          <label><input type="checkbox" id="uc-infra"> Show shared plumbing</label>
+        </div>
+      </div>
+      <div class="graph tall" id="uc-graph"></div>
+      <div class="legend" id="uc-legend"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section class="view" id="view-architecture" hidden>
+  <div class="section-head">
+    <div><h2>Package dependencies</h2><p class="muted">Node size is lines of code. Red nodes are inside the main dependency cycle. Click a package for details.</p></div>
+    <div class="controls">
+      <label><input type="checkbox" id="arch-group" checked> Group subpackages</label>
+      <label><input type="checkbox" id="arch-infra"> Show util / config</label>
+    </div>
+  </div>
+  <div class="grid2" style="grid-template-columns:minmax(0,1.6fr) minmax(0,.9fr)">
+    <div class="graph tall" id="arch-graph"></div>
+    <div class="panel detail" id="arch-detail"></div>
+  </div>
+  <div class="panel">
+    <div class="section-head"><h2>Where the cycle is thinnest</h2><span class="eyebrow">Refactor candidates</span></div>
+    <p class="note" style="margin-top:6px">Package pairs that depend on each other. Sorted by the weaker direction: a single class edge going the "wrong" way is often the cheapest place to break the loop.</p>
+    <div class="tbl-wrap" style="margin-top:12px"><table id="cycle-table"></table></div>
+  </div>
+  <div class="panel">
+    <div class="section-head"><h2>Emergent subsystems</h2><span class="eyebrow">Louvain communities on the class graph</span></div>
+    <p class="note" style="margin-top:6px">Groups of classes that reference each other more than they reference the rest, found without looking at package names. Where a group spans packages, the code is organised differently from the folders.</p>
+    <div class="tbl-wrap" style="margin-top:12px"><table id="comm-table"></table></div>
+  </div>
+</section>
+
+<!-- CLASSES -->
+<section class="view" id="view-classes" hidden>
+  <div class="search">
+    <input id="cls-search" list="cls-options" placeholder="Search a class, e.g. HDMobileAgent or emissary.place.ServiceProviderPlace" autocomplete="off" aria-label="Search classes">
+    <datalist id="cls-options"></datalist>
+  </div>
+  <div class="controls" id="cls-filters">
+    <span class="eyebrow">Show edges</span>
+    <label><input type="checkbox" data-layer="struct" checked> extends / implements</label>
+    <label><input type="checkbox" data-layer="use" checked> uses / new</label>
+    <label><input type="checkbox" data-layer="reflect" checked> by name (reflection)</label>
+    <label><input type="checkbox" data-layer="config" checked> config &amp; resources</label>
+    <label><input type="checkbox" data-layer="wiring" checked> scanning / SPI</label>
+    <label><input type="checkbox" id="cls-two"> 2 hops out</label>
+  </div>
+  <div class="grid2" style="grid-template-columns:minmax(0,1.5fr) minmax(0,1fr)">
+    <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
+      <div class="graph tall" id="cls-graph"></div>
+      <div class="legend" id="cls-legend"></div>
+    </div>
+    <div class="panel detail" id="cls-detail"></div>
+  </div>
+</section>
+
+<!-- ROUTING -->
+<section class="view" id="view-routing" hidden>
+  <div class="section-head">
+    <div><h2>Form routing from config</h2><p class="muted">Rounded nodes are payload forms; boxes are places. Arrows into a place are its routing keys (stage and cost); arrows out are forms it sets.</p></div>
+    <div class="seg" id="route-mode"><button data-m="deployed" aria-pressed="true">Default deployment</button><button data-m="all" aria-pressed="false">Every configured place</button></div>
+  </div>
+  <div class="graph tall" id="route-graph"></div>
+  <div class="callout" id="route-note"></div>
+  <div class="tbl-wrap"><table id="place-table"></table></div>
+</section>
+
+<!-- FINDINGS -->
+<section class="view" id="view-findings" hidden>
+  <div class="panel">
+    <div class="section-head"><h2>Hotspots</h2><span class="eyebrow">Commits × complexity</span></div>
+    <p class="note" style="margin-top:6px">Classes that change often and have many branches. These are where bugs and review effort concentrate. "Test classes" counts test classes that reference the class at all.</p>
+    <div class="tbl-wrap" style="margin-top:12px"><table id="hot-table"></table></div>
+  </div>
+  <div class="panel">
+    <div class="section-head"><h2>Classes nothing in the repo references</h2><span id="unref-count" class="eyebrow"></span></div>
+    <p class="note" style="margin-top:6px">No code, config, resource, scanning or SPI edge points at these. Categories separate real dead-code candidates from plugins that a deployment names in its own config.</p>
+    <div class="row" id="unref-chips" style="margin-top:10px"></div>
+    <div class="tbl-wrap" style="margin-top:12px"><table id="unref-table"></table></div>
+  </div>
+  <div class="grid2">
+    <div class="panel">
+      <h2>Referenced, but unreachable from any entry point</h2>
+      <p class="note" style="margin-top:6px">Something points at these, but nothing reachable from <code>main()</code>, runtime config or SPI does.</p>
+      <div class="tbl-wrap" style="margin-top:12px"><table id="unreach-table"></table></div>
+    </div>
+    <div class="panel">
+      <h2>Config names classes that don't exist</h2>
+      <div class="tbl-wrap" style="margin-top:12px"><table id="stale-table"></table></div>
+      <h2 style="margin-top:20px">Config files with no matching class</h2>
+      <div class="tbl-wrap" style="margin-top:12px"><table id="orphan-table"></table></div>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="panel">
+      <h2>Complex and untested</h2>
+      <p class="note" style="margin-top:6px">Complexity 15 or more, and no test class references them.</p>
+      <div class="tbl-wrap" style="margin-top:12px"><table id="untested-table"></table></div>
+    </div>
+    <div class="panel">
+      <h2>Deprecated</h2>
+      <div class="tbl-wrap" style="margin-top:12px"><table id="dep-table"></table></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+<script>
+const D = /*__DATA__*/null;
+(function () {
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const short = id => String(id).replace(/^emissary\./, "").replace(/^cfg:src\/main\/(resources\/emissary\/|config\/)/, "cfg:");
+const fmt = n => Number(n).toLocaleString("en-US");
+const hasCy = typeof window.cytoscape === "function";
+if (hasCy && window.cytoscapeDagre) { try { cytoscape.use(cytoscapeDagre); } catch (e) {} }
+const hasDagre = hasCy && !!window.cytoscapeDagre;
+
+// ---------------------------------------------------------------- indexes
+const nodes = D.classes.map(c => ({...c, main: true})).concat(D.others.map(o => ({...o, main: false})));
+const byId = new Map(nodes.map((n, i) => [n.id, i]));
+const out = nodes.map(() => []), inn = nodes.map(() => []);
+D.edges.forEach(([s, t, k]) => { out[s].push([t, k]); inn[t].push([s, k]); });
+const KIND = D.kinds;
+const LAYER = k => ({extends:"struct", implements:"struct", new:"use", uses:"use", reflect:"reflect",
+  scan:"wiring", spi:"wiring"}[k] || "config");
+const ucById = new Map(D.useCases.map(u => [u.id, u]));
+const ghBase = `https://github.com/${D.meta.slug}/blob/${D.meta.sha}/`;
+const isInfra = id => /^emissary\.(config|util|log|metrics)(\.|$)/.test(id) ||
+  ["emissary.core.Namespace","emissary.core.NamespaceException","emissary.core.EmissaryException",
+   "emissary.core.EmissaryRuntimeException","emissary.core.Factory","emissary.core.Form"].includes(id);
+const clsBtn = (id, label) => byId.has(id) && nodes[byId.get(id)].main
+  ? `<button class="clsbtn" data-cls="${esc(id)}">${esc(label || short(id))}</button>` : `<code>${esc(label || short(id))}</code>`;
+
+// ---------------------------------------------------------------- theme colours for cytoscape
+function palette() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = n => cs.getPropertyValue(n).trim();
+  return {bg:v("--surface"), ink:v("--ink"), muted:v("--muted"), line:v("--line"), accent:v("--accent"),
+    accentSoft:v("--accent-soft"), accentInk:v("--accent-ink"), warn:v("--warn"), bad:v("--bad"), badSoft:v("--bad-soft"),
+    node:v("--node"), nodeLine:v("--node-line"), surface2:v("--surface-2"),
+    k:{struct:v("--k-struct"), new:v("--k-new"), uses:v("--k-uses"), reflect:v("--k-reflect"),
+       config:v("--k-config"), wiring:v("--k-wiring")}};
+}
+function edgeColor(P, kind) {
+  const l = LAYER(kind);
+  if (l === "struct") return P.k.struct;
+  if (kind === "new") return P.k.new;
+  if (kind === "uses") return P.k.uses;
+  return P.k[l] || P.k.uses;
+}
+function baseStyle(P) {
+  return [
+    {selector:"node", style:{"background-color":P.node, "border-width":1.2, "border-color":P.nodeLine, "label":"data(label)",
+      "color":P.ink, "font-family":"IBM Plex Mono, ui-monospace, monospace", "font-size":10.5, "text-valign":"center",
+      "text-halign":"center", "shape":"round-rectangle", "width":"label", "height":22, "padding":"7px", "text-wrap":"none"}},
+    {selector:"node[kind='interface']", style:{"border-style":"dashed"}},
+    {selector:"node[kind='abstract']", style:{"border-style":"double", "border-width":3}},
+    {selector:"node[kind='config'], node[kind='resource']", style:{"background-color":P.surface2, "border-color":P.k.config,
+      "color":P.k.config, "shape":"tag"}},
+    {selector:"node.focus", style:{"background-color":P.accent, "color":P.accentInk, "border-color":P.accent, "font-weight":600}},
+    {selector:"node.step", style:{"background-color":P.accentSoft, "border-color":P.accent, "border-width":2, "font-weight":600}},
+    {selector:"node.infra", style:{"color":P.muted, "border-color":P.line}},
+    {selector:"node.dim", style:{"opacity":.25}},
+    {selector:"edge", style:{"width":1.2, "curve-style":"bezier", "target-arrow-shape":"triangle", "arrow-scale":.8,
+      "line-color":"data(color)", "target-arrow-color":"data(color)", "opacity":.85}},
+    {selector:"edge[layer='struct']", style:{"width":1.8}},
+    {selector:"edge[kind='implements'], edge[kind='spi']", style:{"line-style":"dashed"}},
+    {selector:"edge.dim", style:{"opacity":.08}},
+    {selector:"edge[label]", style:{"label":"data(label)", "font-size":9.5, "color":P.muted, "text-background-color":P.bg,
+      "text-background-opacity":1, "text-background-padding":"2px", "font-family":"IBM Plex Sans, sans-serif"}},
+  ];
+}
+const graphs = {};
+function mount(key, el, elements, layout, extraStyle = [], onTap) {
+  if (graphs[key]) { graphs[key].destroy(); delete graphs[key]; }
+  el.innerHTML = "";
+  if (!hasCy) { el.innerHTML = `<div class="empty">The graph library didn't load, so this view can't draw. The tables on this page still work.</div>`; return null; }
+  if (!elements.length) { el.innerHTML = `<div class="empty">Nothing to draw with the current filters.</div>`; return null; }
+  const P = palette();
+  const cy = cytoscape({container:el, elements, style:baseStyle(P).concat(extraStyle.map(f => typeof f === "function" ? f(P) : f)),
+    layout, minZoom:.15, maxZoom:3, wheelSensitivity:.25});
+  if (onTap) cy.on("tap", "node", ev => onTap(ev.target.id(), ev));
+  cy.on("mouseover", "node", ev => {
+    const n = ev.target; cy.elements().addClass("dim"); n.closedNeighborhood().removeClass("dim");
+  });
+  cy.on("mouseout", "node", () => cy.elements().removeClass("dim"));
+  graphs[key] = {cy, destroy(){ cy.destroy(); }, rerender: null};
+  return cy;
+}
+const dagreLayout = (dir = "LR", extra = {}) => hasDagre
+  ? {name:"dagre", rankDir:dir, nodeSep:14, rankSep:60, edgeSep:6, animate:false, fit:true, padding:20, ...extra}
+  : {name:"breadthfirst", directed:true, spacingFactor:1.1, animate:false, padding:20};
+const coseLayout = extra => ({name:"cose", animate:false, fit:true, padding:24, nodeRepulsion:() => 9000,
+  idealEdgeLength:() => 90, edgeElasticity:() => 60, gravity:.6, numIter:1500, randomize:false, ...extra});
+
+// ---------------------------------------------------------------- tabs / routing
+const views = ["overview","usecases","architecture","classes","routing","findings"];
+const rendered = {};
+const stale = new Set();
+let current = null;
+function show(view, opts = {}) {
+  if (!views.includes(view)) view = "overview";
+  current = view;
+  $$("#tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.view === view ? "true" : "false"));
+  views.forEach(v => $("#view-" + v).hidden = v !== view);
+  if (!rendered[view]) { rendered[view] = true; renderers[view](); }
+  else if (stale.has(view) && !opts.after) { stale.delete(view); drawers[view](); }
+  if (opts.after) { stale.delete(view); opts.after(); }
+  else if (graphs[view] && graphs[view].cy) { graphs[view].cy.resize(); }
+  try { history.replaceState(null, "", "#" + view); } catch (e) {}
+  try { localStorage.setItem("atlas.view", view); } catch (e) {}
+  if (!opts.keepScroll) window.scrollTo({top:0});
+}
+$("#tabs").addEventListener("click", e => { const b = e.target.closest("button[data-view]"); if (b) show(b.dataset.view); });
+document.addEventListener("click", e => {
+  const c = e.target.closest("[data-cls]"); if (c) { e.preventDefault(); openClass(c.dataset.cls); return; }
+  const u = e.target.closest("[data-uc]"); if (u) { e.preventDefault(); openUseCase(u.dataset.uc); return; }
+  const g = e.target.closest("[data-go]"); if (g) { e.preventDefault(); show(g.dataset.go); }
+});
+
+// ---------------------------------------------------------------- overview
+const M = D.meta, F = D.findings;
+$("#subline").textContent = `${D.meta.slug} @ ${D.meta.head} · ${fmt(M.mainClasses)} classes · generated from source, config and git history`;
+$("#hist-line").textContent = M.history ? `${fmt(M.history.commits)} commits, ${M.history.first} to ${M.history.last} (per-file churn)` : "not included";
+const renderers = {};
+renderers.overview = function () {
+  const tested = D.classes.filter(c => c.t.length).length;
+  const tangle = D.sccs.length ? D.sccs[0].length : 0;
+  $("#stats").innerHTML = [
+    [fmt(M.mainClasses), "main classes"], [fmt(M.mainLoc), "lines in src/main"], [fmt(M.testClasses), "test classes"],
+    [Math.round(100 * tested / M.mainClasses) + "%", "classes a test references"], [fmt(M.configFiles), "config files"],
+    [M.history ? fmt(M.history.commits) : "–", "commits analysed"], [`${tangle} / ${M.packagesTotal}`, "packages in one cycle"],
+  ].map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
+
+  const unref = F.unreferenced, noRefs = unref.filter(x => x.category === "no references found");
+  const hot = F.hotspots || [];
+  const weak = (F.packageCycles || []).filter(c => Math.min(c.weightAB, c.weightBA) === 1).length;
+  const T = [
+    ["bad", "Agents no longer travel between nodes",
+      `The code for moving a running agent to another node is still there, but nothing starts it. <code>PayloadLauncher</code> has no callers, <code>MoveSpool</code> is fed only by it, and <code>MobileAgent</code> counts a non-local directory entry as a move error. Clustering works by handing out work bundles at pickup instead.`,
+      "usecases", "cluster"],
+    ["warn", `${tangle} of ${M.packagesTotal} packages form one dependency cycle`,
+      `Almost every package can reach every other one, so there are no clean layers. ${weak} package pairs are held together by a single class reference in one direction. Those are the cheapest places to cut.`,
+      "architecture"],
+    ["warn", `${short(hot[0]?.class || "")} is the riskiest file to touch`,
+      hot.length ? `It has the most commits (${hot[0].churn}) combined with the highest branch count (${hot[0].complexity}), and only ${hot[0].tests} test class references it. Next come ${hot.slice(1, 5).map(h => short(h.class)).join(", ")}.` : "",
+      "findings"],
+    ["info", `${unref.length} classes have no references in the repo, but only ${noRefs.length} look truly unused`,
+      `Most of the rest are places, Sentinel rules and actions, or utilities that a deployment names in its own config, or that only tests use. The ${noRefs.length} with no references anywhere: ${noRefs.map(x => short(x.class)).join(", ")}.`,
+      "findings"],
+    ["warn", "The class-name inventory lists places that don't exist",
+      `<code>ClassNameInventory.cfg</code> maps ${F.unresolvedClassRefs.filter(x => /Inventory/.test(x.source)).map(x => "<code>" + esc(short(x.ref)) + "</code>").join(", ")}. These are probably leftovers from before the open-source split, or classes that live in a companion project.`,
+      "findings"],
+    ["info", "Out of the box, the pipeline is a demo",
+      `The default <code>places.cfg</code> runs file pickup, <code>UnixFilePlace</code> identification, the <code>ToUpper</code>/<code>ToLower</code> sample transforms, <code>JsonEscapePlace</code>, <code>VersionPlace</code> and <code>DropOffPlace</code>. Real deployments add their own places. The Routing view shows the forms each one accepts and sets.`,
+      "routing"],
+  ];
+  $("#takeaways").innerHTML = T.map(([sev, h, p, go, uc]) => `<div class="takeaway"><div class="sev ${sev}"></div><div>
+    <h3>${esc(h)}</h3><p>${p}</p>
+    ${uc ? `<button class="linkbtn go" data-uc="${uc}">Open the use case</button>` : `<button class="linkbtn go" data-go="${go}">Open ${go}</button>`}</div></div>`).join("");
+  $("#ov-usecases").innerHTML = D.useCases.map(u =>
+    `<button class="uc-item" data-uc="${u.id}"><b>${esc(u.title)}</b><span>${esc(u.who)} · ${Object.keys(u.members).length} classes · ${u.tests.length} test classes</span></button>`).join("");
+};
+
+// ---------------------------------------------------------------- use cases
+let ucCurrent = D.useCases[0].id, ucDepth = 1;
+const HOP_LABEL = {"direct":["good","direct reference"], "none":["", "no static link"], "via hub":["warn","only via a shared hub"]};
+function hopChip(link) {
+  if (!link) return "";
+  const st = link.status;
+  const [cls, label] = HOP_LABEL[st] || ["acc", st.replace("hops", "hops apart")];
+  const dir = link.direction === "backward" ? " (reverse)" : "";
+  const path = link.path && link.path.length > 2 ? `<span class="path">${link.path.map(short).map(esc).join(" → ")}</span>` : "";
+  const why = st === "none" ? `<span>The hand-off is over HTTP, config, or the steps are siblings.</span>` : "";
+  return `<div class="hop"><span class="chip ${cls}">${esc(label)}${dir}</span>${path}${why}</div>`;
+}
+renderers.usecases = function () {
+  const groups = {};
+  D.useCases.forEach(u => (groups[u.who] = groups[u.who] || []).push(u));
+  $("#uc-list").innerHTML = Object.entries(groups).map(([who, us]) => `<div class="eyebrow group-label">${esc(who)}</div>` +
+    us.map(u => `<button class="uc-item" data-uc="${u.id}"><b>${esc(u.title)}</b><span>${Object.keys(u.members).length} classes</span></button>`).join("")).join("");
+  $("#uc-depth").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    ucDepth = +b.dataset.d; $$("#uc-depth button").forEach(x => x.setAttribute("aria-pressed", x === b));
+    drawUseCaseGraph();
+  });
+  $("#uc-infra").addEventListener("change", drawUseCaseGraph);
+  renderUseCase();
+};
+function openUseCase(id) {
+  ucCurrent = id;
+  if (current !== "usecases") show("usecases", {after: () => renderUseCase()});
+  else { renderUseCase(); window.scrollTo({top:0}); }
+}
+function renderUseCase() {
+  const u = ucById.get(ucCurrent);
+  $$("#uc-list .uc-item").forEach(b => b.setAttribute("aria-current", b.dataset.uc === u.id));
+  const verified = u.steps.slice(0, -1).filter(s => s.next && s.next.status !== "none" && s.next.status !== "via hub").length;
+  $("#uc-head").innerHTML = `<div class="eyebrow">${esc(u.who)}</div><h2 style="margin-top:4px">${esc(u.title)}</h2>
+    <p class="muted" style="margin-top:6px;max-width:80ch">${esc(u.summary)}</p>
+    <div class="row" style="margin-top:10px"><span class="chip acc">${Object.keys(u.members).length} classes · ${fmt(u.loc)} lines</span>
+    <span class="chip">${verified} of ${u.steps.length - 1} hand-offs found in code</span><span class="chip">${u.tests.length} test classes</span>
+    ${u.problems.length ? `<span class="chip bad">${u.problems.length} definition problems</span>` : ""}</div>`;
+  $("#uc-steps").innerHTML = u.steps.map((s, i) => `<li class="step"><span class="num">${i + 1}</span><div class="body">
+    ${clsBtn(s.class)}<div class="muted" style="font-size:13px">${esc(s.note)}</div></div>${i < u.steps.length - 1 ? hopChip(s.next) : ""}</li>`).join("");
+  const T = D.tests;
+  const sect = (title, body) => body ? `<div><h3>${title}</h3><div style="margin-top:6px">${body}</div></div>` : "";
+  $("#uc-evidence").innerHTML =
+    sect("Entry points", u.commands.map(c => `<div>${clsBtn(c.class)} <span class="chip acc">./emissary ${esc(c.command)}</span></div>`).join("")) +
+    sect("REST endpoints", u.endpoints.length ? `<div class="scroll-list">${u.endpoints.map(e => `<div><span class="chip">${e.verb}</span> <code>/api${esc(e.path)}</code></div>`).join("")}</div>` : "") +
+    sect("Config files", u.configs.map(c => `<div><a href="${ghBase + c}" target="_blank" rel="noopener"><code>${esc(c.replace(/^src\/main\//, ""))}</code></a></div>`).join("")) +
+    sect("Places involved", u.places.length ? `<div class="row">${u.places.map(p => clsBtn(p, nodes[byId.get(p)].n)).join(" ")}</div>` : "") +
+    sect(`Tests that exercise it (${u.tests.length})`, u.tests.length ? `<div class="scroll-list">${u.tests.map(t => { const tc = T.find(x => x.id === t);
+      return `<div><a href="${ghBase + (tc ? tc.f : "")}" target="_blank" rel="noopener"><code>${esc(short(t))}</code></a></div>`; }).join("")}</div>` : "") +
+    (u.problems.length ? sect("Definition problems", u.problems.map(esc).join("<br>")) : "");
+  drawUseCaseGraph();
+}
+function drawUseCaseGraph() {
+  const u = ucById.get(ucCurrent);
+  const showInfra = $("#uc-infra").checked;
+  const steps = new Set(u.steps.map(s => s.class));
+  const keep = Object.entries(u.members).filter(([id, d]) => d <= ucDepth && (showInfra || !isInfra(id) || steps.has(id))).map(([id]) => id);
+  const set = new Set(keep);
+  const order = new Map(u.steps.map((s, i) => [s.class, i + 1]));
+  const els = keep.filter(id => byId.has(id)).map(id => {
+    const n = nodes[byId.get(id)];
+    return {data:{id, label:(order.has(id) ? order.get(id) + " · " : "") + n.n, kind:n.k},
+      classes:[steps.has(id) ? "step" : "", isInfra(id) ? "infra" : ""].join(" ")};
+  });
+  const P = palette();
+  keep.forEach(id => { const i = byId.get(id); if (i === undefined) return;
+    out[i].forEach(([t, k]) => { const tid = nodes[t].id; if (set.has(tid) && tid !== id)
+      els.push({data:{id:`${id}>${tid}>${k}`, source:id, target:tid, kind:KIND[k], layer:LAYER(KIND[k]), color:edgeColor(P, KIND[k])}}); }); });
+  mount("usecases", $("#uc-graph"), els, dagreLayout("LR", {rankSep:70}), [], id => openClass(id));
+  $("#uc-legend").innerHTML = legendHtml() + `<span><b style="color:var(--accent)">Numbered</b> = flow steps</span>`;
+}
+function legendHtml() {
+  return `<span><i style="border-color:var(--k-struct)"></i>extends</span><span><i class="dash" style="border-color:var(--k-struct)"></i>implements</span>
+  <span><i style="border-color:var(--k-new)"></i>new</span><span><i style="border-color:var(--k-uses)"></i>uses</span>
+  <span><i style="border-color:var(--k-reflect)"></i>by name</span><span><i style="border-color:var(--k-config)"></i>config</span>
+  <span><i style="border-color:var(--k-wiring)"></i>scan / SPI</span><span>dashed box = interface</span><span>double box = abstract</span>`;
+}
+
+// ---------------------------------------------------------------- architecture
+let archSel = null;
+const pkgStats = new Map(D.packages.map(p => [p.id, p]));
+const tangle = new Set(D.sccs[0] || []);
+function groupOf(pkg, grouped) {
+  if (!grouped) return pkg;
+  const parts = pkg.split(".");
+  return parts.length > 2 ? parts.slice(0, 2).join(".") : pkg;
+}
+renderers.architecture = function () {
+  $("#arch-group").addEventListener("change", drawArch);
+  $("#arch-infra").addEventListener("change", drawArch);
+  drawArch();
+  // cycle table
+  const cyc = D.findings.packageCycles;
+  const edgeList = l => l.map(([a, b]) => `${clsBtn(a)} → ${clsBtn(b)}`).join("<br>");
+  $("#cycle-table").innerHTML = `<thead><tr><th>Packages</th><th class="num">A→B</th><th class="num">B→A</th><th>Weaker direction (class edges)</th></tr></thead><tbody>` +
+    cyc.slice(0, 20).map(c => { const weakAB = c.weightAB <= c.weightBA;
+      return `<tr><td><code>${esc(short(c.a))}</code> ⇄ <code>${esc(short(c.b))}</code></td><td class="num">${c.weightAB}</td><td class="num">${c.weightBA}</td>
+      <td>${edgeList(weakAB ? c.ab : c.ba)}</td></tr>`; }).join("") + `</tbody>`;
+  $("#comm-table").innerHTML = `<thead><tr><th class="num">Classes</th><th>Most-used class</th><th>Packages it spans</th></tr></thead><tbody>` +
+    D.communities.filter(c => c.size >= 4).map(c => `<tr><td class="num">${c.size}</td><td>${clsBtn(c.hub)}</td>
+    <td>${c.packages.map(([p, n]) => `<span class="chip">${esc(short(p))} ${n}</span>`).join(" ")}</td></tr>`).join("") + `</tbody>`;
+  archDetail(null);
+};
+function drawArch() {
+  const grouped = $("#arch-group").checked, infra = $("#arch-infra").checked;
+  const agg = new Map(), inCycle = new Map();
+  D.packages.forEach(p => {
+    const g = groupOf(p.id, grouped);
+    if (!infra && /^emissary\.(util|config)(\.|$)/.test(g)) return;
+    const a = agg.get(g) || {loc:0, classes:0};
+    a.loc += p.loc; a.classes += p.classes; agg.set(g, a);
+    if (tangle.has(p.id)) inCycle.set(g, true);
+  });
+  const ew = new Map();
+  D.packageEdges.forEach(e => {
+    const a = groupOf(e.s, grouped), b = groupOf(e.t, grouped);
+    if (a === b || !agg.has(a) || !agg.has(b)) return;
+    ew.set(a + "|" + b, (ew.get(a + "|" + b) || 0) + e.w);
+  });
+  const P = palette();
+  const els = [...agg].map(([id, a]) => ({data:{id, label:short(id) || "emissary", size:18 + Math.sqrt(a.loc) * .55, loc:a.loc, kind:"pkg"},
+    classes:inCycle.get(id) ? "cyc" : ""}));
+  ew.forEach((w, k) => { const [a, b] = k.split("|");
+    els.push({data:{id:k, source:a, target:b, w, color:P.nodeLine, kind:"pkg"}}); });
+  const cy = mount("architecture", $("#arch-graph"), els, coseLayout(), [
+    P2 => ({selector:"node", style:{"shape":"ellipse", "width":"data(size)", "height":"data(size)", "padding":0, "text-valign":"bottom",
+      "text-margin-y":4, "font-size":11, "background-color":P2.accentSoft, "border-color":P2.accent, "font-family":"IBM Plex Sans Condensed, sans-serif"}}),
+    P2 => ({selector:"node.cyc", style:{"background-color":P2.badSoft, "border-color":P2.bad}}),
+    P2 => ({selector:"node.sel", style:{"border-width":3, "border-color":P2.ink}}),
+    {selector:"edge", style:{"width":"mapData(w, 1, 60, 0.8, 7)", "opacity":.45, "arrow-scale":.7}},
+    P2 => ({selector:"edge.hl-out", style:{"line-color":P2.accent, "target-arrow-color":P2.accent, "opacity":1}}),
+    P2 => ({selector:"edge.hl-in", style:{"line-color":P2.warn, "target-arrow-color":P2.warn, "opacity":1}}),
+  ], id => { archSel = id; highlightArch(); archDetail(id); });
+  if (cy && archSel && cy.getElementById(archSel).length) highlightArch();
+}
+function highlightArch() {
+  const g = graphs.architecture; if (!g) return;
+  const cy = g.cy; cy.elements().removeClass("sel hl-out hl-in");
+  const n = cy.getElementById(archSel); if (!n.length) return;
+  n.addClass("sel"); n.outgoers("edge").addClass("hl-out"); n.incomers("edge").addClass("hl-in");
+}
+function archDetail(id) {
+  const el = $("#arch-detail");
+  if (!id) { el.innerHTML = `<h3>Pick a package</h3><p class="muted">Click a circle to see its size, coupling, tests and classes. Outgoing dependencies turn teal and incoming ones amber.</p>
+    <dl class="kv"><dt>Ca</dt><dd>packages that depend on it</dd><dt>Ce</dt><dd>packages it depends on</dd><dt>Instability</dt><dd>Ce ÷ (Ca + Ce): 0 is depended on, 1 is dependent</dd></dl>`; return; }
+  const members = D.packages.filter(p => p.id === id || p.id.startsWith(id + "."));
+  const sum = k => members.reduce((a, p) => a + p[k], 0);
+  const one = members.length === 1 ? members[0] : null;
+  const cls = D.classes.filter(c => members.some(p => p.id === c.p)).sort((a, b) => b.loc - a.loc);
+  const outs = D.packageEdges.filter(e => members.some(p => p.id === e.s) && !members.some(p => p.id === e.t)).sort((a, b) => b.w - a.w);
+  el.innerHTML = `<div><div class="eyebrow">Package${members.length > 1 ? " group" : ""}</div><h2 style="margin-top:4px;word-break:break-all">${esc(id)}</h2></div>
+    <dl class="kv"><dt>Classes</dt><dd>${sum("classes")}</dd><dt>Lines</dt><dd>${fmt(sum("loc"))}</dd>
+    <dt>Referenced by tests</dt><dd>${sum("tested")} of ${sum("classes")}</dd><dt>Commits touching it</dt><dd>${fmt(sum("churn"))}</dd>
+    ${one ? `<dt>Ca / Ce</dt><dd>${one.ca} / ${one.ce}</dd><dt>Instability</dt><dd>${one.instability}</dd><dt>Abstractness</dt><dd>${one.abstractness}</dd>` : ""}
+    <dt>In main cycle</dt><dd>${members.some(p => tangle.has(p.id)) ? "yes" : "no"}</dd></dl>
+    <div><h3>Depends most on</h3><div class="row" style="margin-top:6px">${outs.slice(0, 10).map(e => `<span class="chip">${esc(short(e.t))} ${e.w}</span>`).join("")}</div></div>
+    <div><h3>Classes (largest first)</h3><div class="scroll-list" style="margin-top:6px">${cls.map(c => `<div>${clsBtn(c.id, c.id.slice(c.p.length + 1))} <span class="muted" style="font-size:12px">${fmt(c.loc)} lines</span></div>`).join("")}</div></div>`;
+}
+
+// ---------------------------------------------------------------- classes
+let clsCurrent = "emissary.core.HDMobileAgent";
+renderers.classes = function () {
+  $("#cls-options").innerHTML = D.classes.map(c => `<option value="${esc(c.id)}">`).join("");
+  const go = () => { const v = $("#cls-search").value.trim(); if (!v) return;
+    let id = byId.has(v) ? v : null;
+    if (!id) { const lc = v.toLowerCase(); const hit = D.classes.find(c => c.n.toLowerCase() === lc) || D.classes.find(c => c.id.toLowerCase().includes(lc)); id = hit && hit.id; }
+    if (id) openClass(id); };
+  $("#cls-search").addEventListener("change", go);
+  $("#cls-search").addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+  $$("#cls-filters input").forEach(i => i.addEventListener("change", () => drawClass()));
+  $("#cls-legend").innerHTML = legendHtml();
+  drawClass();
+};
+function openClass(id) {
+  if (!byId.has(id)) return;
+  clsCurrent = id;
+  if (current !== "classes") show("classes", {after: () => drawClass()});
+  else { drawClass(); window.scrollTo({top:0}); }
+}
+function drawClass() {
+  const id = clsCurrent, i = byId.get(id), n = nodes[i];
+  $("#cls-search").value = id;
+  const on = new Set($$("#cls-filters input[data-layer]").filter(x => x.checked).map(x => x.dataset.layer));
+  const two = $("#cls-two").checked;
+  const P = palette();
+  const keepE = ([, k]) => on.has(LAYER(KIND[k]));
+  const nodeSet = new Map([[i, "focus"]]);
+  const edgeList = [];
+  const rank = arr => arr.filter(keepE).sort((a, b) => (nodes[b[0]].fi || 0) - (nodes[a[0]].fi || 0));
+  const ins = rank(inn[i]).slice(0, 45), outs = rank(out[i]).slice(0, 45);
+  ins.forEach(([s, k]) => { nodeSet.set(s, nodeSet.get(s) || "n"); edgeList.push([s, i, k]); });
+  outs.forEach(([t, k]) => { nodeSet.set(t, nodeSet.get(t) || "n"); edgeList.push([i, t, k]); });
+  if (two) outs.forEach(([t]) => rank(out[t]).slice(0, 8).forEach(([u, k]) => { if (nodeSet.size < 140) { nodeSet.set(u, nodeSet.get(u) || "far"); edgeList.push([t, u, k]); } }));
+  const els = [...nodeSet].map(([j, role]) => ({data:{id:nodes[j].id, label:nodes[j].main ? nodes[j].n : nodes[j].n, kind:nodes[j].k},
+    classes:[role === "focus" ? "focus" : "", isInfra(nodes[j].id) ? "infra" : ""].join(" ")}));
+  const seen = new Set();
+  edgeList.forEach(([s, t, k]) => { const key = s + ">" + t + ">" + k; if (seen.has(key)) return; seen.add(key);
+    els.push({data:{id:key, source:nodes[s].id, target:nodes[t].id, kind:KIND[k], layer:LAYER(KIND[k]), color:edgeColor(P, KIND[k])}}); });
+  mount("classes", $("#cls-graph"), els, dagreLayout("LR", {rankSep:90, nodeSep:8}), [], nid => { if (nid !== clsCurrent) openClass(nid); });
+  renderClassDetail(n, inn[i].length > ins.length || out[i].length > outs.length);
+}
+function renderClassDetail(n, truncated) {
+  const el = $("#cls-detail");
+  if (!n.main) {
+    el.innerHTML = `<div><div class="eyebrow">${esc(n.k)}</div><h2 style="margin-top:4px;word-break:break-all">${esc(n.n)}</h2></div>
+      <p><a href="${ghBase + n.f}" target="_blank" rel="noopener"><code>${esc(n.f)}</code></a></p>`; return;
+  }
+  const T = D.tests, i = byId.get(n.id);
+  const kindCount = arr => { const m = {}; arr.forEach(([, k]) => m[KIND[k]] = (m[KIND[k]] || 0) + 1); return Object.entries(m).map(([k, v]) => `<span class="chip">${esc(k)} ${v}</span>`).join(" "); };
+  const place = D.places.find(p => p.id === n.id);
+  const status = [];
+  if (n.en.length) status.push(`<span class="chip acc">entry point</span>`);
+  if (n.pl) status.push(`<span class="chip acc">place</span>`);
+  if (!inn[i].length && !n.en.length) status.push(`<span class="chip warn">no inbound references</span>`);
+  else if (!n.rch) status.push(`<span class="chip warn">unreachable from entry points</span>`);
+  if (n.dep) status.push(`<span class="chip bad">deprecated</span>`);
+  if (!n.t.length) status.push(`<span class="chip bad">no test references it</span>`);
+  el.innerHTML = `<div><div class="eyebrow">${esc(n.k)} · ${esc(n.p)}</div><h2 style="margin-top:4px;word-break:break-all">${esc(n.n)}</h2>
+      ${n.doc ? `<p class="doc" style="margin-top:6px">${esc(n.doc)}</p>` : ""}<div class="row" style="margin-top:8px">${status.join("")}</div></div>
+    <dl class="kv"><dt>Source</dt><dd><a href="${ghBase + n.f}" target="_blank" rel="noopener"><code>${esc(n.f.replace(/^src\/main\/java\//, ""))}</code></a></dd>
+      <dt>Lines / methods</dt><dd>${fmt(n.loc)} / ${n.m}</dd><dt>Complexity</dt><dd>${n.cx}</dd>
+      <dt>Commits</dt><dd>${n.ch} total, ${n.ch2} in the last two years</dd>
+      <dt>Referenced by</dt><dd>${inn[i].length} ${kindCount(inn[i])}</dd><dt>References</dt><dd>${out[i].length} ${kindCount(out[i])}</dd>
+      ${n.anc.length ? `<dt>Inherits</dt><dd>${n.anc.map(a => clsBtn(a)).join(", ")}</dd>` : ""}
+      ${n.en.length ? `<dt>Entry because</dt><dd>${n.en.map(esc).join("; ")}</dd>` : ""}
+      ${n.cmd ? `<dt>CLI</dt><dd><code>./emissary ${esc(n.cmd)}</code></dd>` : ""}</dl>
+    ${truncated ? `<p class="note">The graph shows the 45 most-used neighbours in each direction.</p>` : ""}
+    ${place && place.keys.length ? `<div><h3>Routing keys</h3><div style="margin-top:6px">${place.keys.map(k => `<div><span class="chip">${esc(k.stage)}</span> <code>${esc(k.form)}</code> <span class="muted">cost ${k.cost ?? "?"}${k.flavor ? " · " + esc(k.flavor) : ""}</span></div>`).join("")}</div></div>` : ""}
+    ${n.ep.length ? `<div><h3>Endpoints</h3><div style="margin-top:6px">${n.ep.map(e => `<div><span class="chip">${e.verb}</span> <code>/api${esc(e.path)}</code></div>`).join("")}</div></div>` : ""}
+    ${n.uc.length ? `<div><h3>Use cases</h3><div class="row" style="margin-top:6px">${n.uc.map(u => `<button class="chip acc" style="border:0;cursor:pointer" data-uc="${u}">${esc(ucById.get(u).title)}</button>`).join("")}</div></div>` : ""}
+    <div><h3>Test classes that reference it (${n.t.length})</h3><div class="scroll-list" style="margin-top:6px">${n.t.map(t => `<div><a href="${ghBase + T[t].f}" target="_blank" rel="noopener"><code>${esc(short(T[t].id))}</code></a></div>`).join("") || `<span class="muted">None</span>`}</div></div>`;
+}
+
+// ---------------------------------------------------------------- routing
+let routeMode = "deployed";
+renderers.routing = function () {
+  $("#route-mode").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return;
+    routeMode = b.dataset.m; $$("#route-mode button").forEach(x => x.setAttribute("aria-pressed", x === b)); drawRouting(); });
+  drawRouting();
+  const rows = D.places.slice().sort((a, b) => (b.deployed.length - a.deployed.length) || a.name.localeCompare(b.name));
+  $("#place-table").innerHTML = `<thead><tr><th>Place</th><th>Accepts (form · stage · cost)</th><th>Sets forms</th><th>In places.cfg</th></tr></thead><tbody>` +
+    rows.map(p => `<tr><td>${clsBtn(p.id, p.name)}${p.abstract ? ` <span class="chip">abstract</span>` : ""}</td>
+      <td>${p.keys.map(k => `<div><code>${esc(k.form)}</code> · ${esc(k.stage)} · ${k.cost ?? "?"}${k.flavor ? ` <span class="chip">${esc(k.flavor)}</span>` : ""}</div>`).join("") || `<span class="muted">none in repo config</span>`}</td>
+      <td>${p.emits.map(e => `<code>${esc(e.form)}</code>${e.flavor ? ` <span class="chip">${esc(e.flavor)}</span>` : ""}`).join("<br>") || ""}</td>
+      <td>${p.deployed.map(d => `<span class="chip acc">${esc(d)}</span>`).join(" ") || `<span class="muted">no</span>`}</td></tr>`).join("") + `</tbody>`;
+  $("#route-note").innerHTML = `Forms come from each place's <code>SERVICE_KEY</code> / <code>SERVICE_PROXY</code> and <code>*_FORM</code> settings. A place can also set forms in code, so arrows out of a place are a lower bound. <code>*</code> matches any form, which is how <code>DropOffPlace</code> catches everything at the IO stage. Test-fixture configs (<code>-test.cfg</code>) are left out.`;
+};
+function drawRouting() {
+  const ps = D.places.filter(p => !p.abstract && p.keys.length && (routeMode === "all" || p.deployed.length) && p.name !== "DirectoryPlace");
+  const P = palette();
+  const els = [], forms = new Set();
+  const stageOrder = ["INPUT","STUDY","ID","COORDINATE","PRETRANSFORM","TRANSFORM","POSTTRANSFORM","ANALYZE","VERIFY","IO","REVIEW"];
+  ps.forEach(p => {
+    els.push({data:{id:p.id, label:p.name + (p.deployed.length ? "  [" + p.deployed.join(", ") + "]" : ""), kind:"class"}, classes:"place"});
+    p.keys.forEach(k => { const f = "form:" + k.form; forms.add(k.form);
+      els.push({data:{id:`${f}>${p.id}>${k.stage}>${k.flavor}`, source:f, target:p.id, label:`${k.stage} · ${k.cost ?? "?"}${k.flavor ? " · " + k.flavor : ""}`,
+        color:P.k.config, kind:"route", layer:"config", rank:stageOrder.indexOf(k.stage)}}); });
+    p.emits.forEach(e => { const f = "form:" + e.form; forms.add(e.form);
+      els.push({data:{id:`${p.id}>${f}>${e.flavor}`, source:p.id, target:f, label:e.flavor ? e.flavor : "", color:P.k.new, kind:"emit", layer:"use"}}); });
+  });
+  forms.forEach(f => els.unshift({data:{id:"form:" + f, label:f, kind:"form"}, classes:"form"}));
+  mount("routing", $("#route-graph"), els, dagreLayout("LR", {rankSep:110, nodeSep:22}), [
+    P2 => ({selector:"node.form", style:{"shape":"round-rectangle", "background-color":P2.accentSoft, "border-color":P2.accent, "color":P2.accent, "font-weight":600}}),
+    P2 => ({selector:"node.place", style:{"shape":"rectangle", "background-color":P2.node, "border-color":P2.ink, "border-width":1.5}}),
+    {selector:"edge[kind='emit']", style:{"line-style":"dashed"}},
+  ], id => { if (!id.startsWith("form:")) openClass(id); });
+}
+
+// ---------------------------------------------------------------- findings
+renderers.findings = function () {
+  const F = D.findings;
+  const hot = F.hotspots || [], max = hot.length ? hot[0].score : 1;
+  $("#hot-table").innerHTML = `<thead><tr><th>Class</th><th style="width:22%">Score</th><th class="num">Commits</th><th class="num">Complexity</th><th class="num">Lines</th><th class="num">Test classes</th></tr></thead><tbody>` +
+    hot.slice(0, 20).map(h => `<tr><td>${clsBtn(h.class)}</td><td><div class="bar${h.tests <= 1 ? " warn" : ""}" style="width:${Math.max(3, 100 * h.score / max)}%"></div></td>
+      <td class="num">${h.churn}</td><td class="num">${h.complexity}</td><td class="num">${fmt(h.loc)}</td><td class="num">${h.tests}</td></tr>`).join("") + `</tbody>`;
+  const cats = {};
+  F.unreferenced.forEach(u => cats[u.category] = (cats[u.category] || 0) + 1);
+  const catClass = c => c === "no references found" ? "bad" : c.startsWith("library") || c.startsWith("opt-in") ? "warn" : "acc";
+  let catFilter = null;
+  const drawUnref = () => {
+    $("#unref-chips").innerHTML = `<button class="chip ${catFilter ? "" : "acc"}" style="border:0;cursor:pointer" data-cat="">All ${F.unreferenced.length}</button>` +
+      Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([c, v]) => `<button class="chip ${catClass(c)}" style="border:0;cursor:pointer;${catFilter === c ? "outline:2px solid currentColor" : ""}" data-cat="${esc(c)}">${esc(c)} ${v}</button>`).join("");
+    const rows = F.unreferenced.filter(u => !catFilter || u.category === catFilter).sort((a, b) => a.category.localeCompare(b.category) || b.loc - a.loc);
+    $("#unref-table").innerHTML = `<thead><tr><th>Class</th><th>Category</th><th class="num">Lines</th><th class="num">Test classes</th></tr></thead><tbody>` +
+      rows.map(u => `<tr><td>${clsBtn(u.class)}</td><td><span class="chip ${catClass(u.category)}">${esc(u.category)}</span>${u.commentedIn && u.commentedIn.length ? `<div class="note">commented out in <code>${esc(u.commentedIn[0].replace(/^src\/main\//, ""))}</code></div>` : ""}</td>
+        <td class="num">${fmt(u.loc)}</td><td class="num">${u.tests}</td></tr>`).join("") + `</tbody>`;
+  };
+  $("#unref-chips").addEventListener("click", e => { const b = e.target.closest("[data-cat]"); if (!b) return; catFilter = b.dataset.cat || null; drawUnref(); });
+  $("#unref-count").textContent = `${F.unreferenced.length} classes`;
+  drawUnref();
+  $("#unreach-table").innerHTML = `<thead><tr><th>Class</th><th>Referenced only by</th></tr></thead><tbody>` +
+    F.unreachable.map(u => `<tr><td>${clsBtn(u.class)}<div><span class="chip ${catClass(u.category)}">${esc(u.category)}</span></div></td><td>${u.referencedBy.map(r => clsBtn(r)).join("<br>")}</td></tr>`).join("") + `</tbody>`;
+  $("#stale-table").innerHTML = `<thead><tr><th>Missing class</th><th>Named in</th></tr></thead><tbody>` +
+    F.unresolvedClassRefs.map(u => `<tr><td><code>${esc(u.ref)}</code></td><td><code>${esc(u.source.replace(/^src\/main\//, ""))}</code><div class="note">${esc(u.where)}</div></td></tr>`).join("") + `</tbody>`;
+  $("#orphan-table").innerHTML = `<thead><tr><th>Config file</th><th>Would configure</th></tr></thead><tbody>` +
+    F.orphanConfigs.map(u => `<tr><td><code>${esc(u.config.replace(/^src\/main\//, ""))}</code></td><td><code>${esc(u.expectedClass)}</code></td></tr>`).join("") + `</tbody>`;
+  $("#untested-table").innerHTML = `<thead><tr><th>Class</th><th class="num">Complexity</th><th class="num">Lines</th><th class="num">Used by</th></tr></thead><tbody>` +
+    F.untestedComplex.map(u => `<tr><td>${clsBtn(u.class)}</td><td class="num">${u.complexity}</td><td class="num">${fmt(u.loc)}</td><td class="num">${u.fanIn}</td></tr>`).join("") + `</tbody>`;
+  $("#dep-table").innerHTML = `<thead><tr><th>Class</th><th class="num">Lines</th><th class="num">Used by</th></tr></thead><tbody>` +
+    F.deprecated.map(u => `<tr><td>${clsBtn(u.class)}</td><td class="num">${fmt(u.loc)}</td><td class="num">${u.fanIn}</td></tr>`).join("") + `</tbody>`;
+};
+
+// ---------------------------------------------------------------- theme changes re-colour graphs
+const drawers = {usecases: () => drawUseCaseGraph(), architecture: () => drawArch(), classes: () => drawClass(), routing: () => drawRouting()};
+const redraw = () => {
+  Object.keys(drawers).forEach(k => { if (rendered[k]) stale.add(k); });
+  if (stale.has(current)) { stale.delete(current); drawers[current](); }
+};
+try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw); } catch (e) {}
+new MutationObserver(redraw).observe(document.documentElement, {attributes:true, attributeFilter:["data-theme"]});
+
+// ---------------------------------------------------------------- boot
+let start = (location.hash || "").slice(1);
+if (!views.includes(start)) { try { start = localStorage.getItem("atlas.view") || "overview"; } catch (e) { start = "overview"; } }
+show(start);
+})();
+</script>

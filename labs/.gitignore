@@ -1,0 +1,9 @@
+build/
+target/
+cp.txt
+tree.txt
+*.log
+__pycache__/
+emissary-graph/out/
+emissary-places/bench/corpus-*/
+emissary-places/samples/demo/
