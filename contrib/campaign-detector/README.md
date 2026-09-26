@@ -239,3 +239,63 @@ directory and must not count. Expected: exactly that campaign root; picked
   it does not gate the campaign.
 - `missing_ids` is empty when the id range is more than ten times the number
   of candidates or the names differ outside their last digit run.
+
+## Real filesystems: materialize and walk
+
+`campaign_detector.walker` proves the detector reads a real directory the
+same way it reads a synthetic table, and is the crawler for a pilot on a
+real NFS subtree.
+
+```sh
+python3 -m campaign_detector materialize --scenario positive_amber_basic.kdr_fep --dest /tmp/kdr_fs
+python3 -m campaign_detector walk --root /tmp/kdr_fs --out /tmp/kdr_walked.tsv \
+    --map-root /tmp/kdr_fs:/ --owners /tmp/kdr_fs.owners.tsv
+python3 -m campaign_detector detect --inventory /tmp/kdr_walked.tsv   # same report as the synthetic TSV
+
+# pilot on a real tree: no sidecar, optionally hash
+python3 -m campaign_detector walk --root /nfs/projects/KDR --out kdr.tsv [--hash]
+```
+
+- `materialize(inv, dest, *, sparse=True) -> Manifest` writes `/vol3/...` to
+  `<dest>/vol3/...`; `dest` must be missing or empty and stands for `/`.
+  Files are sparse (`truncate` to the recorded size, so the 1.1 TB KDR tree
+  takes ~200 KB); `sparse=False` writes deterministic bytes seeded by the
+  recorded sha256 (copies stay byte-identical) and refuses files over
+  64 MiB. Symlink targets are verbatim, files sharing inode, size, mtime
+  and uid with `nlink > 1` become hard links (inode numbers repeat across
+  volumes), and mtimes are set deepest first so directory mtimes survive.
+- What an unprivileged process cannot set goes in the `Manifest` and in
+  `<dest>.owners.tsv` (columns `path uid gid sha256 ctime`; read it with
+  `load_owners`): owners, the recorded sha256 (a sparse file's real hash is
+  just "zeros of this size") and ctime (always "now" on disk; the mirror
+  gate in step 2 compares ctimes).
+- `walk_fs(root, *, map_root=None, hash=False, owners=None,
+  follow_symlinks=False, on_error=None) -> Inventory` opens every directory
+  with `O_DIRECTORY|O_NOFOLLOW` relative to its parent's fd, lists it with
+  `os.scandir(fd)` and stats entries relative to that fd without following
+  symlinks, so a tree being modified cannot redirect the walk. Names are
+  decoded with `surrogateescape`, `/` and every ancestor of the root are
+  emitted (strict inventory), symlinks keep `os.readlink` verbatim with
+  `size = len(target)`, and inode/nlink come from `lstat`.
+  `map_root=(src, dst)` rewrites the on-disk prefix; ancestors above `dst`
+  that have no disk counterpart are synthesised with inode 0. `hash=True`
+  reads regular files in 1 MiB blocks (sparse files are read in full: do
+  not hash a materialized campaign). `owners` (sidecar path, `Manifest`,
+  or `{path: (uid, gid[, sha256[, ctime]])}`) overrides uid/gid/ctime and
+  supplies sha256 when `hash` is off (a file that fails to hash gets none).
+  `follow_symlinks=True` reports a link to a regular file as that file;
+  links to directories always stay links, so the walk never leaves the root
+  or visits a directory twice. A bind mount of an open ancestor is listed
+  but not entered.
+- Errors never abort the walk: an `OSError` opening or listing a directory
+  (EACCES, ESTALE, EIO) skips its subtree, one on an entry skips the entry,
+  and a name or symlink target holding a tab, newline or carriage return
+  (not representable in the TSV) is skipped as `EINVAL`. Each goes to `on_error` (re-raise there to abort) and
+  to the inventory's `walk_errors` list; the `walk` CLI prints them and
+  exits 1 after writing the TSV. Sockets, fifos and devices are skipped.
+- Round trip (`tests/test_walker.py`): the KDR scenario materialized and
+  walked back equals the synthetic inventory on path, kind, size, mtime,
+  uid, gid, target, sha256 and ctime for all 2,087 entries, hard-linked
+  names share an inode, and `detect()` returns an identical `to_dict()`:
+  root `/vol3/projects/KDR_2011/fep`, picks lig012/lig029/lig041, 43 not
+  picked, missing lig017/lig033.
