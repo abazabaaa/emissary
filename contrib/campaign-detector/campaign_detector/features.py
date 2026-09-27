@@ -114,6 +114,7 @@ _CAMEL_RE = re.compile(r"([a-z])([A-Z])")
 _SPLIT_RE = re.compile(r"[^a-z0-9]+")
 _ALNUM_RE = re.compile(r"[a-z]+|\d+")
 _ID_RE = re.compile(r"[a-z]+\d+")
+_ID_SEP_RE = re.compile(r"([a-z]+)[_-]?(\d+)")
 _VERSION_RE = re.compile(r"^v\d+$")
 _TEMPLATED_RE = re.compile(r"^[a-z0-9_.\-]+$")
 _DIGITS_RE = re.compile(r"\d+")
@@ -164,15 +165,16 @@ def is_templated(name: str) -> bool:
 
 
 def id_tokens(name: str) -> set[str]:
-    """All ``[a-z]+\\d+`` runs of the lower-cased name plus zero-stripped variants.
+    """Candidate-id tokens of a name: ``letters[_-]?digits`` runs, joined, plus zero-stripped variants.
 
-    ``lig017_rmsd.png`` -> ``{"lig017", "lig17"}``.
+    ``lig017_rmsd.png`` -> ``{"lig017", "lig17"}``; ``cmpd_017_rmsd.png`` and
+    ``lig-017.png`` give the same tokens as ``cmpd017``/``lig017``. The
+    letters are always kept, so ``cmpd012`` never meets ``lig012``.
     """
     out: set[str] = set()
-    for m in _ID_RE.findall(name.lower()):
-        out.add(m)
-        letters = m.rstrip("0123456789")
-        out.add(letters + str(int(m[len(letters):])))
+    for letters, digits in _ID_SEP_RE.findall(name.lower()):
+        out.add(letters + digits)
+        out.add(letters + str(int(digits)))
     return out
 
 
