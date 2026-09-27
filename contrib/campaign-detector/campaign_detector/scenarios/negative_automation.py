@@ -204,15 +204,6 @@ NIGHT_1C = at(107, 2)
         "'analysis/converged', one link per second at 02:00, i.e. 100% of the completed runs."
     ),
     expected=ExpectedOutcome.campaign_no_selection(ROOT_1C, cids=ALL_24),
-    known_gap=(
-        "coverage_cap: the cap counts all 24 candidates, so a farm of the 16 completed runs (67%) is kept "
-        "and selection confidence 1.0 x 8/24 = 0.33 clears the 0.3 floor (17 of 24 would give 0.29 and "
-        "be caught). Signals that separate it from a human pick: (a) the linked set is exactly the set "
-        "of candidates whose chunk series is complete (100% coverage of completed runs, where a human picks "
-        "a small subset of them); (b) lockstep cadence: 16 links written 1 s apart at 02:00, where a "
-        "human's links spread over minutes in working hours; (c) the candidate order of the links follows "
-        "the run index."
-    ),
 )
 def build_qc_symlink_farm_two_thirds() -> Inventory:
     tb = TreeBuilder(root="/data")

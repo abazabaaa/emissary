@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from .features import (
     DERIVED_EXTS, MD_CLASS_NAMES, NEG_WORDS, POS_WORDS, REPLICA_WORDS, DirFeatures, all_features, classify,
-    dominant, era, files_within, has_version_marker, id_tokens, is_working_hours, sibling_uniformity, tokens,
+    count_bursts, dominant, era, files_within, has_version_marker, id_tokens, is_working_hours, sibling_uniformity, tokens,
     word_hits,
 )
 from .inventory import Entry, Inventory, normalize_path
@@ -74,6 +74,10 @@ class Params:
     """Onset lock: a submitter-owned dir first written within this long after the last chunk is the job's."""
     script_density_s: int = 10
     """Density/offset lock tolerance: one entry per this many seconds, or offsets equal within it."""
+    cap_completed: bool = True
+    """Coverage cap also counts against the completed runs (full chunk count) and uses the larger share."""
+    machine_band: float = 0.5
+    """Between this share and ``coverage_cap``, machine-shaped evidence units are dropped too (1.0 disables)."""
 
 
 @dataclass
@@ -757,14 +761,71 @@ def _check_hook_evidence(evidence: Iterable[Evidence], by_id: dict[str, Candidat
     return out
 
 
-def _cap_coverage(evidence: list[Evidence], n_candidates: int, cap: float, notes: list[str]) -> list[Evidence]:
-    """Drop evidence groups that link to at least ``cap`` of all candidates.
+def _completed_runs(report: CampaignReport, p: Params) -> frozenset[str]:
+    """Ids of the candidates whose trajectory chunk count is the campaign maximum ("finished runs").
+
+    Empty unless some runs fell short and at least ``min_candidates`` finished,
+    so coverage against completed runs only applies where it can differ.
+    """
+    counts = {c.id: c.features.traj_chunk_count for c in report.candidates}
+    full = max(counts.values(), default=0)
+    done = frozenset(cid for cid, n in counts.items() if n == full)
+    return done if p.min_candidates <= len(done) < len(counts) else frozenset()
+
+
+def _machine_shaped(group: list[Evidence], mtime_of: Callable[[str], int | None]) -> str | None:
+    """Why a set of evidence looks machine-made, else ``None``.
+
+    (a) >= 0.9 of it keeps the source basename (a mirror layout, not a
+    person's renames); (b) it was written in one burst at a regular cadence
+    (interval regularity >= 0.9) in candidate-id order, as a loop does.
+    """
+    kept = sum(1 for e in group if posixpath.basename(e.src) == posixpath.basename(e.ref))
+    if kept >= 0.9 * len(group):
+        return f"{kept} of {len(group)} keep the source name"
+    first: dict[str, int] = {}
+    for e in group:
+        t = mtime_of(e.src)
+        if t is not None:
+            first[e.candidate] = min(first.get(e.candidate, t), t)
+    ts = [first[c] for c in sorted(first)]
+    steps = [b - a for a, b in zip(ts, ts[1:])]
+    if len(steps) >= 2 and count_bursts(ts) == 1 and min(steps) > 0:
+        mean = statistics.fmean(steps)
+        if 1 - statistics.pstdev(steps) / mean >= 0.9:
+            return f"one burst every {mean:.0f} s in candidate order"
+    return None
+
+
+def _cap_coverage(evidence: list[Evidence], n_candidates: int, p: Params, notes: list[str], *,
+                  completed: frozenset[str] = frozenset(),
+                  mtime_of: Callable[[str], int | None] = lambda path: None) -> list[Evidence]:
+    """Drop evidence groups that link to (nearly) all candidates, or to many in a machine's shape.
 
     Per kind, a unit is either the evidence directly in one directory or the
-    evidence anywhere below one directory (excluding ``/``). Minimal covering
-    units (covering, with no covering sub-unit) are dropped; then, if the
-    remaining evidence of that kind still covers, it is dropped as a whole.
+    evidence anywhere below one directory (excluding ``/``). A unit's share
+    is the larger of (candidates it names / all candidates) and (completed
+    runs it names / completed runs, see :func:`_completed_runs`). A unit
+    *covers* when its share reaches ``coverage_cap``, or when it lies in the
+    ambiguous band ``[machine_band, coverage_cap)`` and is machine-shaped
+    (:func:`_machine_shaped`). Minimal covering units (covering, with no
+    covering sub-unit) are dropped; then, if the remaining evidence of that
+    kind still reaches the cap, it is dropped as a whole.
     """
+    def share(group: list[Evidence]) -> float:
+        named = {e.candidate for e in group}
+        out = len(named) / n_candidates
+        if completed:
+            out = max(out, len(named & completed) / len(completed))
+        return out
+
+    def covers(group: list[Evidence]) -> str | None:
+        s = share(group)
+        if s >= p.coverage_cap:
+            return f"covers {s:.0%} of candidates (mirror/index/pipeline)"
+        machine = _machine_shaped(group, mtime_of) if s >= p.machine_band else None
+        return f"covers {s:.0%} of candidates and is machine-shaped: {machine}" if machine else None
+
     kept: list[Evidence] = []
     for kind in sorted({e.kind for e in evidence}):
         items = [e for e in evidence if e.kind == kind]
@@ -777,21 +838,18 @@ def _cap_coverage(evidence: list[Evidence], n_candidates: int, cap: float, notes
                 units.setdefault(("tree", a), []).append(e)
                 a = posixpath.dirname(a)
 
-        covering = {u for u, group in units.items() if len({e.candidate for e in group}) / n_candidates >= cap}
+        covering = {u: why for u, group in units.items() if (why := covers(group))}
         # A covering tree is minimal unless its direct files or a child tree also cover.
         not_minimal = {("tree", u[1]) for u in covering if u[0] == "direct"}
         not_minimal |= {("tree", posixpath.dirname(u[1])) for u in covering if u[0] == "tree"}
         dropped: set[int] = set()
-        for unit in sorted(covering - not_minimal):
+        for unit in sorted(set(covering) - not_minimal):
             group = units[unit]
             dropped.update(id(e) for e in group)
-            share = len({e.candidate for e in group}) / n_candidates
-            notes.append(f"dropped {len(group)} {kind} links from {unit[1]}: covers {share:.0%} of "
-                         "candidates (mirror/index/pipeline)")
+            notes.append(f"dropped {len(group)} {kind} links from {unit[1]}: {covering[unit]}")
         rest = [e for e in items if id(e) not in dropped]
-        share = len({e.candidate for e in rest}) / n_candidates
-        if rest and share >= cap:
-            notes.append(f"dropped {len(rest)} {kind} links across all curated dirs: covers {share:.0%} of "
+        if rest and share(rest) >= p.coverage_cap:
+            notes.append(f"dropped {len(rest)} {kind} links across all curated dirs: covers {share(rest):.0%} of "
                          "candidates (mirror/index/pipeline)")
             continue
         kept.extend(rest)
@@ -847,7 +905,10 @@ def detect(inv: Inventory, *, params: Params | None = None, hooks: Hooks | None 
         unique: dict[tuple[str, str, str], Evidence] = {}
         for e in evidence:
             unique.setdefault((e.kind, e.candidate, e.src), e)
-        for e in _cap_coverage(list(unique.values()), report.n_candidates, p.coverage_cap, report.notes):
+        completed = _completed_runs(report, p) if p.cap_completed else frozenset()
+        mtime_of = lambda path: inv.by_path[path].mtime if path in inv.by_path else None  # noqa: E731
+        for e in _cap_coverage(list(unique.values()), report.n_candidates, p, report.notes, completed=completed,
+                               mtime_of=mtime_of):
             by_id[e.candidate].evidence.append(e)
         for c in report.candidates:
             c.evidence.sort(key=lambda e: (e.kind, e.src))

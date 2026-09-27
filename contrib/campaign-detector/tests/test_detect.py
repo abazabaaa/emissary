@@ -80,10 +80,14 @@ def test_hardlink_evidence() -> None:
 def test_broad_selection_reverts_to_unknown() -> None:
     tb, names = _tree(24)
     pick_by_copy(tb, ROOT, A, names[:18], uid=3002, mtime=LATER)
-    (rep,) = detect(tb.build()).campaigns
+    # One call copies 18 of 24 at a 60 s cadence in id order: machine-shaped, so the ambiguous-band rule
+    # drops it first. Switch that rule off to exercise the selection-confidence backstop on its own.
+    (rep,) = detect(tb.build(), params=Params(machine_band=1.0)).campaigns
     assert not rep.picked() and rep.unknown() == set(names)
     assert rep.selection_confidence == pytest.approx(0.25)
     assert any("selection confidence" in n for n in rep.notes)
+    (default,) = detect(tb.build()).campaigns
+    assert not default.picked() and any("machine-shaped" in n for n in default.notes)
 
 
 def test_hooks_add_evidence_and_are_validated() -> None:
