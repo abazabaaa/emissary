@@ -238,7 +238,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] not in SUBCOMMANDS:
         print("usage: python -m campaign_detector {" + ",".join(SUBCOMMANDS) + "} [options]", file=sys.stderr)
+        width = max(map(len, SUBCOMMANDS))
         for name, fn in SUBCOMMANDS.items():
-            print(f"  {name:<9} {(fn.__doc__ or '').strip()}", file=sys.stderr)
+            print(f"  {name:<{width}}  {(fn.__doc__ or '').strip()}", file=sys.stderr)
         return 0 if args[:1] in (["-h"], ["--help"]) else 2
     return SUBCOMMANDS[args[0]](args[1:])

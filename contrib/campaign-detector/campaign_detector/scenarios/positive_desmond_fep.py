@@ -106,8 +106,6 @@ def _build(candidate_fmt: str) -> Inventory:
     description="Desmond FEP+ on KDR: 24 lig_### x 12 lambda windows fold to 24 candidates; dG plots pick 3; "
                 "2013 dirs graduate lig_007 (also plotted) and lig_011 (graduation only: unknown)",
     expected=_expected(UNDERSCORE_FMT),
-    known_gap="derived: id_tokens only sees letters immediately followed by digits, so 'lig_007' yields no "
-              "id token; the dG plots and the 2013 graduation dirs link to no candidate and nothing is picked",
     name="kdr_fep_plus",
 )
 def build_kdr_fep_plus() -> Inventory:

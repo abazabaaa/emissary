@@ -204,15 +204,6 @@ NIGHT_1C = at(107, 2)
         "'analysis/converged', one link per second at 02:00, i.e. 100% of the completed runs."
     ),
     expected=ExpectedOutcome.campaign_no_selection(ROOT_1C, cids=ALL_24),
-    known_gap=(
-        "coverage_cap: the cap counts all 24 candidates, so a farm of the 16 completed runs (67%) is kept "
-        "and selection confidence 1.0 x 8/24 = 0.33 clears the 0.3 floor (17 of 24 would give 0.29 and "
-        "be caught). Signals that separate it from a human pick: (a) the linked set is exactly the set "
-        "of candidates whose chunk series is complete (100% coverage of completed runs, where a human picks "
-        "a small subset of them); (b) lockstep cadence: 16 links written 1 s apart at 02:00, where a "
-        "human's links spread over minutes in working hours; (c) the candidate order of the links follows "
-        "the run index."
-    ),
 )
 def build_qc_symlink_farm_two_thirds() -> Inventory:
     tb = TreeBuilder(root="/data")
@@ -325,14 +316,6 @@ WORKDAY_3B = workday(92)
         "the first run."
     ),
     expected=ExpectedOutcome.campaign_no_selection(ROOT_3B, cids=ALL_24),
-    known_gap=(
-        "derived: derived evidence checks only the id token in the name and mtime > t_end, not the file's "
-        "sha, so 'lig001_README.md' (a .md copy of README.md, byte-identical in all 24 candidates) scores "
-        "0.7 for run_lig001, while copy_out on the same file is correctly rejected by the uniqueness gate. "
-        "Signal: a derived-extension file whose sha256 occurs in >= 2 candidates is boilerplate, not an "
-        "artifact about one candidate; apply the uniqueness gate to derived too. Supporting signal: the "
-        "named candidate is the lowest index (the script's reference run)."
-    ),
 )
 def build_reference_run_protocol_bundle() -> Inventory:
     tb = TreeBuilder(root="/data")
@@ -373,16 +356,6 @@ CHOSEN_4 = ("run_lig003", "run_lig008", "run_lig012", "run_lig018", "run_lig021"
         "Saturday, under the submitter's own uid."
     ),
     expected=ExpectedOutcome.campaign_no_selection(ROOT_4, cids=CHOSEN_4),
-    known_gap=(
-        "curated_dir: 'analysis' scores exactly 3 of 6 (approval word, 67% derived, written after the "
-        "campaign) with owner == submitter and off-hours counting only as missed points, so 5 x 1.4 derived "
-        "picks follow. A night-owl human on the same account would still differ in: (a) write density: 15 "
-        "entries in 22 s (a scripted loop), where a person's writes are tens of seconds to minutes apart; "
-        "(b) onset lock: the first write is 180 s after t_end, the job's own end, where a person arrives "
-        "hours or days later; (c) a constant per-candidate template: exactly the same 3 suffixes per "
-        "candidate (child-name diversity 0.2). Rule for hardening: owner == submitter and "
-        "mtime_min - t_end < 1 h and burst rate > 1 file/10 s means pipeline, veto."
-    ),
 )
 def build_submission_postprocess() -> Inventory:
     tb = TreeBuilder(root="/data")
@@ -420,16 +393,6 @@ EPILOGUE_S = 180
         "last chunk, under the submitter's uid, interleaved with the still-running campaign."
     ),
     expected=ExpectedOutcome.campaign_no_selection(ROOT_4B, cids=CONVERGED_4B),
-    known_gap=(
-        "curated_dir: 'analysis' scores 3 of 6 (approval word, 67% derived, 100% working hours, because the "
-        "runs end on a Friday between 09:30 and 14:45) though owner == submitter and 12 of its 15 files "
-        "predate the campaign's end; derived ignores 4 of the 5 epilogues (mtime <= t_end) but accepts "
-        "run_lig024's, whose run finished last, so exactly that one is picked. Signal: per-candidate "
-        "offset lock: for every id-named file, mtime minus the named candidate's own last-chunk mtime is "
-        "the same 180 s (+0..2 s), which a human's session never shows; the files also interleave with "
-        "chunk writes. Rule for hardening: when owner == submitter and those offsets are constant "
-        "across >= 3 candidates, the dir is the job's own output, veto."
-    ),
 )
 def build_per_job_epilogue_daytime() -> Inventory:
     tb = TreeBuilder(root="/data")

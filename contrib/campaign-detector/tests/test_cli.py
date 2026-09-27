@@ -41,3 +41,10 @@ def test_features_and_list(tmp_path, capsys) -> None:
 def test_dispatch() -> None:
     assert set(SUBCOMMANDS) >= {"synth", "detect", "features", "demo"}
     assert main([]) == 2 and main(["nope"]) == 2
+
+
+def test_usage_aligns_every_subcommand(capsys) -> None:
+    assert main(["--help"]) == 0
+    rows = [line for line in capsys.readouterr().err.splitlines() if line.startswith("  ")]
+    starts = {line.index("``") for line in rows}
+    assert len(rows) == len(SUBCOMMANDS) and len(starts) == 1  # descriptions share one column

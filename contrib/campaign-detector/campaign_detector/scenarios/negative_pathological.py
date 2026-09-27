@@ -215,9 +215,6 @@ REPL_ROOT = "/vol4/legacy/tiny_replicas/data"
         "their ligand and are never candidates themselves."
     ),
     expected=ExpectedOutcome.no_campaign(),
-    known_gap=("campaign_root: each run_x00N with four rep# children qualifies as its own root, and the parent "
-               "has only 3 candidates so nothing absorbs them; the replicas are reported as candidates of three "
-               "separate campaigns and the copied replica is 'picked'"),
 )
 def build_few_candidates_replicated() -> Inventory:
     """3 candidates x 4 replicas, a copy-out of ``run_x001/rep1/prod001.nc``.

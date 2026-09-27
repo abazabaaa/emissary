@@ -18,8 +18,8 @@ from dataclasses import dataclass
 
 from .features import (
     DERIVED_EXTS, MD_CLASS_NAMES, NEG_WORDS, POS_WORDS, REPLICA_WORDS, DirFeatures, all_features, classify,
-    dominant, era, files_within, has_version_marker, id_tokens, is_working_hours, sibling_uniformity, tokens,
-    word_hits,
+    count_bursts, dominant, era, files_within, has_version_marker, id_tokens, is_working_hours, sibling_uniformity,
+    tokens, word_hits,
 )
 from .inventory import Entry, Inventory, normalize_path
 
@@ -50,6 +50,37 @@ class Params:
     selection_conf: float = 0.3
     tz_offset_s: int = 0
     copy_overlap: float = 0.8
+    require_topology: bool = True
+    """A campaign needs a TOPO file in its members' modal signature or directly in the root."""
+    min_run_span_s: int = 3600
+    """Median member run window (first MD file -> last trajectory chunk) a campaign needs: compute happened."""
+    batch_subsets: bool = True
+    """Also evaluate same-signature batches of every template group, not only the largest group."""
+    batch_max_gap_s: int = 7 * 86400
+    """Largest idle gap between the run windows of a batch (one submission, overlapping or back-to-back)."""
+    drop_replica_roots: bool = True
+    """Drop a replica-level root (``rep#``, ``lambda_#``) of one of several templated sibling runs that no
+    outer campaign absorbs (too few siblings to be a campaign themselves)."""
+    mirror_provenance: bool = True
+    """Mirror gate: taint and provenance (submit script, analysis dir) outrank ctime."""
+    derived_locality: bool = True
+    """Derived evidence counts only from a curated dir local to the campaign or holding link evidence into it."""
+    derived_locality_levels: int = 1
+    """Locality radius: a curated dir within the root's parent (1) or grandparent (2) on the same volume."""
+    derived_uniqueness: bool = True
+    """A derived-extension file whose hash occurs in >= 2 candidates is boilerplate, not derived evidence."""
+    symlink_max_hops: int = 40
+    """Symlink chains are followed up to this many hops (loops stop earlier)."""
+    script_cadence: bool = True
+    """A submitter-owned dir written like a script (onset + density, or offset lock) is never curated."""
+    script_onset_s: int = 3600
+    """Onset lock: first write within this long after the campaign's last chunk (needs density too)."""
+    script_density_s: int = 10
+    """Density/offset lock tolerance: one entry per this many seconds, or offsets equal within it."""
+    cap_completed: bool = True
+    """Coverage cap also counts against the completed runs (full chunk count) and uses the larger share."""
+    machine_band: float = 0.5
+    """Between this share and ``coverage_cap``, machine-shaped evidence units are dropped too (1.0 disables)."""
 
 
 @dataclass
@@ -219,30 +250,87 @@ class _Root:
     notes: list[str]
     traj_shas: frozenset[str]
     first_ctime: int
+    run_span_s: float
+    run_ends: dict[str, int]
 
 
-def _evaluate_root(inv: Inventory, feats: dict[str, DirFeatures], path: str, p: Params) -> _Root | None:
-    if feats[path].n_dirs < p.min_candidates:
+_SCRIPT_EXTS = frozenset({".sh", ".bash", ".csh", ".zsh", ".slurm", ".sbatch", ".pbs", ".job", ".fmp", ".msj"})
+"""Extensions of submission scripts and workflow files a campaign root keeps beside its runs."""
+
+
+def _run_window(files: list[Entry], cls: dict[str, str]) -> tuple[int, int] | None:
+    """``(first MD-file mtime, last trajectory mtime)`` of one member's files, ``None`` without TRAJ."""
+    md = [f for f in files if cls[f.path] in MD_CLASS_NAMES]
+    trajs = [f.mtime for f in md if cls[f.path] == "TRAJ"]
+    if not trajs:
         return None
-    group, uniformity, tfrac, mode_sig = sibling_uniformity(inv, feats, path)
+    return min(f.mtime for f in md), max(trajs)
+
+
+def _shared_topology(inv: Inventory, path: str, members: set[str]) -> bool:
+    """True when a TOPO file sits where runs share one: directly in the root, in a non-member child
+    dir of the root (``setup/``, ``common/``), or directly in the root's parent."""
+    places = [path, posixpath.dirname(path)]
+    places += [c.path for c in inv.children(path) if c.kind == "d" and c.path not in members]
+    return any(c.kind == "f" and classify(c) == "TOPO" for d in places for c in inv.children(d))
+
+
+def _cotemporal(windows: list[tuple[int, int]], max_gap_s: int) -> bool:
+    """True when the run windows, sorted by start, never leave a gap longer than ``max_gap_s``."""
+    ordered = sorted(windows)
+    end = ordered[0][1]
+    for start, stop in ordered[1:]:
+        if start - end > max_gap_s:
+            return False
+        end = max(end, stop)
+    return True
+
+
+def _evaluate_group(inv: Inventory, feats: dict[str, DirFeatures], path: str, group: list[str], uniformity: float,
+                    tfrac: float, mode_sig: tuple[str, ...], p: Params, *, batch: bool) -> _Root | str:
+    """Apply the campaign-root gates to ``group`` (child dirs of ``path``); a gate name on rejection.
+
+    ``batch=True`` evaluates a same-signature subset of a template group
+    (:func:`_batches`): the template-fraction gate is replaced by the batch
+    definition (one submitter, run windows that overlap or follow each other).
+    """
     classes = {s.split(":", 1)[0] for s in mode_sig}
-    if (len(group) < p.min_candidates or tfrac < p.template_fraction or uniformity < p.uniformity
-            or len(classes) < p.min_md_classes or "TRAJ" not in classes):
-        return None
-    files = [f for m in group for f in files_within(inv, m, 2)]
+    if len(group) < p.min_candidates:
+        return "min_candidates"
+    if not batch and tfrac < p.template_fraction:
+        return "template_fraction"
+    if uniformity < p.uniformity:
+        return "uniformity"
+    if len(classes) < p.min_md_classes:
+        return "min_md_classes"
+    if "TRAJ" not in classes:
+        return "no_traj"
+    per_member = {m: files_within(inv, m, 2) for m in group}
+    files = [f for m in group for f in per_member[m]]
+    cls = {f.path: classify(f) for f in files}
     total = sum(f.size for f in files)
-    trajs = [f for f in files if classify(f) == "TRAJ"]
+    trajs = [f for f in files if cls[f.path] == "TRAJ"]
     traj_frac = sum(f.size for f in trajs) / total if total else 0.0
     submitter, purity = dominant(f.uid for f in files)
-    if traj_frac < p.traj_byte_fraction or purity < p.uid_purity:
-        return None
+    if traj_frac < p.traj_byte_fraction:
+        return "traj_byte_fraction"
+    if purity < p.uid_purity:
+        return "uid_purity"
+    if p.require_topology and "TOPO" not in classes and not _shared_topology(inv, path, set(group)):
+        return "no_topology"
+    by_member = {m: _run_window(per_member[m], cls) for m in group}
+    windows = [w for w in by_member.values() if w is not None]
+    if batch and not _cotemporal(windows, p.batch_max_gap_s):
+        return "batch_not_cotemporal"
     regs = [feats[m].traj_chunk_regularity for m in group if feats[m].traj_chunk_regularity is not None]
     reg = statistics.fmean(regs) if regs else 0.0
     md_classes = len(classes & set(MD_CLASS_NAMES))
     confidence = 0.3 * uniformity + 0.2 * md_classes / 6 + 0.2 * traj_frac + 0.15 * reg + 0.15 * purity
     if confidence < p.campaign_conf:
-        return None
+        return "campaign_conf"
     notes = []
+    if batch:
+        notes.append(f"batch of {len(group)} same-signature, one-submitter runs among the child dirs of {path}")
     if reg < p.chunk_regularity:
         notes.append(f"irregular chunk mtimes (regularity {reg:.2f} < {p.chunk_regularity}): "
                      "chunks may have been copied or touched after the run")
@@ -255,56 +343,206 @@ def _evaluate_root(inv: Inventory, feats: dict[str, DirFeatures], path: str, p: 
         engine=min(engines, key=lambda e: (-engines[e], e)), confidence=confidence, submitter_uid=submitter,
         t_start=min(f.mtime for f in trajs), t_end=max(f.mtime for f in trajs), notes=notes,
         traj_shas=frozenset(f.sha256 for f in trajs if f.sha256), first_ctime=min(f.ctime for f in trajs),
+        run_span_s=statistics.median(stop - start for start, stop in windows),
+        run_ends={m: w[1] for m, w in by_member.items() if w is not None},
     )
+
+
+def _batches(inv: Inventory, feats: dict[str, DirFeatures], path: str,
+             p: Params) -> Iterable[tuple[list[str], float, tuple[str, ...]]]:
+    """Same-signature subsets of every template group of ``path``'s child dirs, largest group first.
+
+    Within a template group, the members whose MD signature holds TRAJ are
+    grouped by exact signature; the most common signature (ties: smallest)
+    is the batch. Yields ``(members, uniformity 1.0, signature)``.
+    """
+    groups: dict[str, list[str]] = {}
+    for c in inv.children(path):
+        if c.kind == "d":
+            groups.setdefault(feats[c.path].name_template, []).append(c.path)
+    for template in sorted(groups, key=lambda t: (-len(groups[t]), t)):
+        by_sig: dict[tuple[str, ...], list[str]] = {}
+        for m in groups[template]:
+            sig = feats[m].signature
+            if any(s.startswith("TRAJ:") for s in sig):
+                by_sig.setdefault(sig, []).append(m)
+        if by_sig:
+            sig = min(by_sig, key=lambda s: (-len(by_sig[s]), s))
+            if len(by_sig[sig]) >= p.min_candidates:
+                yield sorted(by_sig[sig]), 1.0, sig
+
+
+def _evaluate_root(inv: Inventory, feats: dict[str, DirFeatures], path: str, p: Params) -> _Root | str:
+    """Evaluate ``path`` as a campaign root; the name of the first failed gate on rejection.
+
+    The largest template group of the child dirs is tried first
+    (:func:`~campaign_detector.features.sibling_uniformity`). If it fails,
+    every same-signature batch of every template group is tried
+    (:func:`_batches`), so a uniform subset inside a heterogeneous group or
+    an outnumbered template group can still be a campaign.
+    """
+    if feats[path].n_dirs < p.min_candidates:
+        return "min_candidates"
+    group, uniformity, tfrac, mode_sig = sibling_uniformity(inv, feats, path)
+    first = _evaluate_group(inv, feats, path, group, uniformity, tfrac, mode_sig, p, batch=False)
+    if isinstance(first, _Root) or not p.batch_subsets:
+        return first
+    batch_gates = []
+    for members, uni, sig in _batches(inv, feats, path, p):
+        if members == group:
+            continue
+        found = _evaluate_group(inv, feats, path, members, uni, 1.0, sig, p, batch=True)
+        if isinstance(found, _Root):
+            return found
+        batch_gates.append(found)
+    return first + "".join(f"|batch:{g}" for g in batch_gates)
 
 
 def _is_replica_level(template: str) -> bool:
     return bool(set(tokens(template)) & REPLICA_WORDS)
 
 
-def _find_roots(inv: Inventory, feats: dict[str, DirFeatures], p: Params) -> list[_Root]:
+def _is_candidate_replica_level(inv: Inventory, feats: dict[str, DirFeatures], root: _Root) -> bool:
+    """True when ``root``'s members are a replica level (``rep#``) *and* ``root`` itself is one of
+    >= 2 templated siblings (``run_x001``, ``run_x002``): the replicas of a candidate, not a campaign.
+
+    A lone directory of ``clone_001..clone_024`` stays a campaign.
+    """
+    if not _is_replica_level(root.template):
+        return False
+    tpl = feats[root.path].name_template
+    parent = posixpath.dirname(root.path)
+    return sum(1 for c in inv.children(parent) if c.kind == "d" and feats[c.path].name_template == tpl) >= 2
+
+
+def _find_roots(inv: Inventory, feats: dict[str, DirFeatures], p: Params,
+                verdicts: dict[str, str] | None = None) -> list[_Root]:
     """Qualifying roots, deepest first; an outer root absorbs roots inside its members.
 
     Exception: when at least half of the members hold an inner root whose
     members are not a replica level (``rep#``, ``lambda_#.#``...), the
     members are campaigns in their own right (``batch1..batch4``) and the
-    outer directory is not a root.
+    outer directory is not a root. A replica-level root that no outer root
+    absorbs is dropped: replicas are repeats of one candidate, never
+    candidates. ``verdicts`` (if given) receives a gate name or ``"root"``
+    for every directory with at least ``min_candidates`` child dirs.
     """
     found: dict[str, _Root] = {}
+    verdict: dict[str, str] = {}
     for d in sorted(inv.dirs(), key=lambda e: (-feats[e.path].depth, e.path)):
         root = _evaluate_root(inv, feats, d.path, p)
-        if root is None:
+        if isinstance(root, str):
+            if feats[d.path].n_dirs >= p.min_candidates:
+                verdict[d.path] = root
             continue
         inner = [r for r in found.values() if any(is_within(r.path, m) for m in root.group)]
         campaigns = {m for m in root.group for r in inner
                      if is_within(r.path, m) and not _is_replica_level(r.template)}
         if 2 * len(campaigns) >= len(root.group):
+            verdict[d.path] = "members_are_campaigns"
             continue
         for r in inner:
             del found[r.path]
+            verdict[r.path] = f"absorbed_by:{d.path}"
         found[d.path] = root
-    return [found[k] for k in sorted(found)]
+        verdict[d.path] = "root"
+    out = []
+    for path in sorted(found):
+        if p.drop_replica_roots and _is_candidate_replica_level(inv, feats, found[path]):
+            verdict[path] = "replica_level"
+        else:
+            out.append(found[path])
+    if verdicts is not None:
+        verdicts.update(verdict)
+    return out
 
 
-def _split_copies(roots: list[_Root], p: Params) -> tuple[list[_Root], list[_Root]]:
-    """Separate campaigns from later byte-identical copies of other campaigns.
+def _provenance(inv: Inventory, root: _Root) -> int:
+    """Signs that ``root`` is where the campaign was run, 0-2: a submit script or workflow file in the
+    root or its parent (1), and a non-member directory beside the runs, such as ``analysis/`` in the
+    root or a sibling of the root (1)."""
+    members = set(root.group)
+    parent = posixpath.dirname(root.path)
+    near = inv.children(root.path) + inv.children(parent)
+    script = any(c.kind == "f" and (c.ext in _SCRIPT_EXTS or word_hits(c.stem, {"submit"})) for c in near)
+    side_dir = any(c.kind == "d" and c.path not in members and c.path != root.path for c in near)
+    return int(script) + int(side_dir)
 
-    A root is a copy when at least ``copy_overlap`` of its trajectory hashes
-    occur in another root whose chunks were created (ctime) earlier; the
-    original gets a note.
+
+def _split_copies(inv: Inventory, roots: list[_Root], p: Params) -> tuple[list[_Root], list[_Root]]:
+    """Separate campaigns from byte-identical copies of other campaigns.
+
+    ``r`` is a copy of ``other`` when at least ``copy_overlap`` of ``r``'s
+    trajectory hashes occur in ``other`` and ``other`` ranks first by, in
+    order: not tainted relative to the other root (``backup/``, ``old/``),
+    more provenance (:func:`_provenance`: a submit script, an analysis dir),
+    earlier chunk ctime. The original gets a note. Provenance before ctime
+    matters when a working copy was restored from its own mirror; a whole
+    project mirror has the same provenance, so ctime decides.
     """
-    copies: list[_Root] = []
+    prov = {r.path: _provenance(inv, r) if p.mirror_provenance else 0 for r in roots}
+
+    def rank(r: _Root, other: _Root) -> tuple[bool, int, int]:
+        return is_tainted(r.path, anchor=other.path), -prov[r.path], r.first_ctime
+
+    copies: dict[str, _Root] = {}
     for r in roots:
         for other in roots:
-            if other is r or not r.traj_shas or other.first_ctime >= r.first_ctime:
+            if other is r or not r.traj_shas or other.path in copies:
                 continue
             overlap = len(r.traj_shas & other.traj_shas) / len(r.traj_shas)
-            if overlap >= p.copy_overlap:
-                copies.append(r)
-                other.notes.append(f"ignored {r.path}: {overlap:.0%} of its trajectory chunks are later copies "
-                                   "of this campaign's (mirror/backup)")
+            if overlap >= p.copy_overlap and rank(other, r) < rank(r, other):
+                copies[r.path] = r
+                other.notes.append(f"ignored {r.path}: {overlap:.0%} of its trajectory chunks are copies of this "
+                                   "campaign's (mirror/backup)")
                 break
-    return [r for r in roots if r not in copies], copies
+    return [r for r in roots if r.path not in copies], list(copies.values())
+
+
+def _campaign_roots(inv: Inventory, feats: dict[str, DirFeatures], p: Params,
+                    verdicts: dict[str, str] | None = None) -> tuple[list[_Root], list[_Root]]:
+    """Step 2: ``(campaign roots, mirror/backup copies)``.
+
+    Roots come from :func:`_find_roots`, copies are split off by
+    :func:`_split_copies`, then roots where no computation happened are
+    dropped (compute-happened gate): the median member run window (first MD
+    file to last trajectory chunk) is below ``min_run_span_s``, as in a bulk
+    copy of course kits (every file carries the copy instant) or a screen
+    that crashed minutes into its first chunk. Copies are split first so a
+    mirror whose chunk mtimes were not preserved is still recognised.
+    """
+    v: dict[str, str] = {}
+    roots, copies = _split_copies(inv, _find_roots(inv, feats, p, v), p)
+    for c in copies:
+        v[c.path] = "mirror_copy"
+    kept = []
+    for r in roots:
+        if r.run_span_s < p.min_run_span_s:
+            v[r.path] = "no_compute"
+        else:
+            kept.append(r)
+    if verdicts is not None:
+        verdicts.update(v)
+    return kept, copies
+
+
+def root_verdicts(inv: Inventory, *, params: Params | None = None) -> dict[str, str]:
+    """Why each would-be root is or is not a campaign: path -> ``"root"`` or the gate that rejected it.
+
+    Covers every directory with at least ``min_candidates`` child dirs.
+    Gate names: ``template_fraction``, ``uniformity``, ``min_md_classes``,
+    ``no_traj``, ``no_topology``, ``traj_byte_fraction``, ``uid_purity``,
+    ``campaign_conf``, ``min_candidates`` (template group too small),
+    ``members_are_campaigns``, ``absorbed_by:<outer root>``,
+    ``replica_level``, ``mirror_copy``, ``no_compute``. When the largest
+    template group fails and same-signature batches were tried too, their
+    gates follow as ``|batch:<gate>`` (``uniformity|batch:uid_purity``).
+    """
+    p = params or Params()
+    feats = all_features(inv, tz_offset_s=p.tz_offset_s)
+    out: dict[str, str] = {}
+    _campaign_roots(inv, feats, p, out)
+    return dict(sorted(out.items()))
 
 
 def _missing_ids(names: list[str]) -> list[str]:
@@ -355,8 +593,52 @@ class _Context:
         return _owner(path, self.all_candidates) is not None
 
 
-def _curated_dirs(ctx: _Context, root: _Root, p: Params, tainted: Callable[[str], bool]) -> list[CuratedDir]:
-    """Score untainted non-candidate dirs; files and symlinks both count as entries."""
+def _script_shaped(entries: list[Entry], root: _Root, p: Params) -> str | None:
+    """Why a directory written under the submitter's uid looks like the job's own output, else ``None``.
+
+    Two signals: the job's own finish (onset lock *and* write density: the
+    first write within ``script_onset_s`` after the campaign's last chunk,
+    and every entry within ``script_density_s`` per entry), or a per-job
+    epilogue (offset lock: id-named files of >= 3 candidates land at the
+    same offset, within ``script_density_s``, from each candidate's own last
+    chunk). Either alone is ordinary for a person on the same account (who
+    may start right after the runs end, or make links in one shell loop).
+    Hard links are ignored: their mtime and uid belong to the linked inode,
+    not to the act of linking.
+    """
+    entries = [e for e in entries if e.kind == "l" or e.nlink == 1]
+    if not entries:
+        return None
+    mtimes = sorted(e.mtime for e in entries)
+    onset = root.t_end <= mtimes[0] <= root.t_end + p.script_onset_s
+    dense = len(mtimes) >= 3 and mtimes[-1] - mtimes[0] <= p.script_density_s * (len(mtimes) - 1)
+    if onset and dense:
+        return (f"first write {mtimes[0] - root.t_end} s after the campaign's last chunk, "
+                f"{len(mtimes)} entries within {mtimes[-1] - mtimes[0]} s")
+    ends = {posixpath.basename(m): t for m, t in root.run_ends.items()}
+    by_token: dict[str, set[str]] = {}
+    for cid in ends:
+        for tok in id_tokens(cid):
+            by_token.setdefault(tok, set()).add(cid)
+    offsets: dict[str, int] = {}
+    for e in entries:
+        named = set().union(*(by_token.get(t, set()) for t in id_tokens(e.name)))
+        if len(named) == 1:
+            cid = named.pop()
+            offsets[cid] = min(offsets.get(cid, e.mtime - ends[cid]), e.mtime - ends[cid])
+    if len(offsets) >= 3 and max(offsets.values()) - min(offsets.values()) <= p.script_density_s:
+        return f"id-named files sit {min(offsets.values())} s after their own run's last chunk"
+    return None
+
+
+def _curated_dirs(ctx: _Context, root: _Root, p: Params, tainted: Callable[[str], bool],
+                  notes: list[str] | None = None) -> list[CuratedDir]:
+    """Score untainted non-candidate dirs; files and symlinks both count as entries.
+
+    With ``script_cadence``, a directory owned by the submitter that is
+    script-shaped (:func:`_script_shaped`) is never curated; ``notes``
+    receives why.
+    """
     root_parent = posixpath.dirname(root.path)
     out = []
     for path, f in ctx.feats.items():
@@ -385,8 +667,14 @@ def _curated_dirs(ctx: _Context, root: _Root, p: Params, tainted: Callable[[str]
             reasons.append(f"owner uid {owner} is not the submitter")
         if not f.name_is_templated and f.child_name_diversity >= 0.5:
             reasons.append("irregular hand-made names")
-        if len(reasons) >= p.curated_score:
-            out.append(CuratedDir(path=path, uid=owner, score=len(reasons), n_files=len(entries), reasons=reasons))
+        if len(reasons) < p.curated_score:
+            continue
+        script = _script_shaped(entries, root, p) if p.script_cadence and owner == root.submitter_uid else None
+        if script is not None:
+            if notes is not None:
+                notes.append(f"{path} is not curated: written by the submitter like a script ({script})")
+            continue
+        out.append(CuratedDir(path=path, uid=owner, score=len(reasons), n_files=len(entries), reasons=reasons))
     return out
 
 
@@ -400,8 +688,57 @@ def _unique_owner(matches: Iterable[Entry], cands: dict[str, str]) -> tuple[str,
     return next(iter(owners.items())) if len(owners) == 1 else None
 
 
-def _builtin_evidence(ctx: _Context, root: _Root, curated: list[CuratedDir],
-                      tainted: Callable[[str], bool]) -> list[Evidence]:
+def _volume(path: str) -> str:
+    """First path component: the inventory has no device column, so this stands for the volume."""
+    return path.split("/", 2)[1] if path != "/" else ""
+
+
+def _is_local(path: str, root: _Root, levels: int = 1) -> bool:
+    """True when ``path`` is on the campaign's volume and within the root's ``levels``-th ancestor
+    (1 = the root's parent; locality rule)."""
+    anchor = root.path
+    for _ in range(levels):
+        anchor = posixpath.dirname(anchor)
+    return _volume(path) == _volume(root.path) and is_within(path, anchor)
+
+
+def _follow_symlink(inv: Inventory, link: Entry, cands: dict[str, str], max_hops: int) -> tuple[str, str] | None:
+    """``(candidate id, target path)`` for the first path along ``link``'s chain inside a candidate.
+
+    Each hop resolves the stored target against the link's directory; the
+    walk continues while the target is itself a symlink in the inventory, up
+    to ``max_hops`` hops, and gives up on a loop. A dangling or foreign end
+    yields ``None``.
+    """
+    seen = {link.path}
+    cur = link
+    for _ in range(max_hops):
+        tgt = cur.resolved_target()
+        if tgt is None:
+            return None
+        cid = _owner(tgt, cands)
+        if cid is not None:
+            return cid, tgt
+        nxt = inv.by_path.get(tgt)
+        if nxt is None or nxt.kind != "l" or nxt.path in seen:
+            return None
+        seen.add(nxt.path)
+        cur = nxt
+    return None
+
+
+def _builtin_evidence(ctx: _Context, root: _Root, curated: list[CuratedDir], tainted: Callable[[str], bool],
+                      p: Params) -> list[Evidence]:
+    """Evidence from the direct children of curated dirs, plus graduation from later dirs.
+
+    Per curated dir: ``hardlink``/``copy_out`` (the file's inode or hash
+    falls under exactly one candidate), ``symlink`` (the chain reaches
+    exactly one candidate) and ``derived`` (an id-named artifact written
+    after the campaign). Derived evidence is skipped for boilerplate (the
+    file's hash occurs in >= 2 candidates) and, with ``derived_locality``,
+    for a curated dir that is neither local to the campaign (same volume,
+    within the root's parent) nor a source of link evidence into it.
+    """
     inv = ctx.inv
     cands = {m: posixpath.basename(m) for m in root.group}
     by_token: dict[str, list[str]] = {}
@@ -411,6 +748,8 @@ def _builtin_evidence(ctx: _Context, root: _Root, curated: list[CuratedDir],
 
     out: list[Evidence] = []
     for cd in curated:
+        links: list[Evidence] = []
+        derived: list[Evidence] = []
         for e in inv.children(cd.path):
             if tainted(e.path):
                 continue
@@ -419,20 +758,24 @@ def _builtin_evidence(ctx: _Context, root: _Root, curated: list[CuratedDir],
                 twins = [x for x in inv.by_inode.get(e.inode, ()) if x.path != e.path and x.kind == "f"
                          and (x.size, x.mtime, x.uid) == (e.size, e.mtime, e.uid)] if e.nlink > 1 else []
                 hard = _unique_owner(twins, cands)
-                same = _unique_owner(inv.by_sha.get(e.sha256, ()), cands) if e.sha256 else None
+                same_sha = inv.by_sha.get(e.sha256, ()) if e.sha256 else ()
+                same = _unique_owner(same_sha, cands)
                 if hard:
-                    out.append(Evidence("hardlink", hard[0], e.path, hard[1], EVIDENCE_WEIGHTS["hardlink"]))
+                    links.append(Evidence("hardlink", hard[0], e.path, hard[1], EVIDENCE_WEIGHTS["hardlink"]))
                 elif same:
-                    out.append(Evidence("copy_out", same[0], e.path, same[1], EVIDENCE_WEIGHTS["copy_out"]))
-                if e.ext in DERIVED_EXTS and e.mtime > root.t_end:
+                    links.append(Evidence("copy_out", same[0], e.path, same[1], EVIDENCE_WEIGHTS["copy_out"]))
+                boilerplate = len({_owner(x.path, cands) for x in same_sha} - {None}) >= 2
+                if e.ext in DERIVED_EXTS and e.mtime > root.t_end and not (p.derived_uniqueness and boilerplate):
                     hits = sorted({m for tok in id_tokens(e.name) for m in by_token.get(tok, ())})
-                    out.extend(Evidence("derived", cands[m], e.path, m, EVIDENCE_WEIGHTS["derived"],
-                                        "candidate id in artifact name") for m in hits)
+                    derived.extend(Evidence("derived", cands[m], e.path, m, EVIDENCE_WEIGHTS["derived"],
+                                            "candidate id in artifact name") for m in hits)
             elif e.kind == "l":
-                tgt = e.resolved_target()
-                cid = _owner(tgt, cands) if tgt else None
-                if cid is not None:
-                    out.append(Evidence("symlink", cid, e.path, str(tgt), EVIDENCE_WEIGHTS["symlink"]))
+                hit = _follow_symlink(inv, e, cands, p.symlink_max_hops)
+                if hit is not None:
+                    links.append(Evidence("symlink", hit[0], e.path, hit[1], EVIDENCE_WEIGHTS["symlink"]))
+        out.extend(links)
+        if not p.derived_locality or links or _is_local(cd.path, root, p.derived_locality_levels):
+            out.extend(derived)
     for d in ctx.outside_roots:
         if d.mtime <= root.t_end or tainted(d.path):
             continue
@@ -455,14 +798,85 @@ def _check_hook_evidence(evidence: Iterable[Evidence], by_id: dict[str, Candidat
     return out
 
 
-def _cap_coverage(evidence: list[Evidence], n_candidates: int, cap: float, notes: list[str]) -> list[Evidence]:
-    """Drop evidence groups that link to at least ``cap`` of all candidates.
+def _completed_runs(report: CampaignReport, p: Params) -> frozenset[str]:
+    """Ids of the candidates whose trajectory chunk count is the campaign maximum ("finished runs").
+
+    Empty unless some runs fell short while at least half of the candidates
+    and at least ``min_candidates`` finished: when only a minority reaches
+    the maximum, those runs were *extended* (often by the person choosing
+    them), not the normal outcome a script filters on.
+    """
+    counts = {c.id: c.features.traj_chunk_count for c in report.candidates}
+    full = max(counts.values(), default=0)
+    done = frozenset(cid for cid, n in counts.items() if n == full)
+    if len(done) < p.min_candidates or 2 * len(done) < len(counts) or len(done) == len(counts):
+        return frozenset()
+    return done
+
+
+def _machine_shaped(group: list[Evidence], mtime_of: Callable[[str], int | None]) -> str | None:
+    """Why a set of evidence looks machine-made, else ``None``.
+
+    (a) >= 0.9 of its byte copies (``copy_out``/``hardlink``) keep the
+    source basename (a mirror layout, not a person's renames; a symlink
+    named after its target is just ``ln -s``); (b) it was written in one
+    burst at a regular cadence (interval regularity >= 0.9) in
+    candidate-id order, as a loop does.
+    """
+    copies = [e for e in group if e.kind in ("copy_out", "hardlink")]
+    kept = sum(1 for e in copies if posixpath.basename(e.src) == posixpath.basename(e.ref))
+    if copies and kept >= 0.9 * len(copies):
+        return f"{kept} of {len(copies)} copies keep the source name"
+    first: dict[str, int] = {}
+    for e in group:
+        t = mtime_of(e.src)
+        if t is not None:
+            first[e.candidate] = min(first.get(e.candidate, t), t)
+    ts = [first[c] for c in sorted(first)]
+    steps = [b - a for a, b in zip(ts, ts[1:])]
+    if len(steps) >= 2 and count_bursts(ts) == 1 and min(steps) > 0:
+        mean = statistics.fmean(steps)
+        if 1 - statistics.pstdev(steps) / mean >= 0.9:
+            return f"one burst every {mean:.0f} s in candidate order"
+    return None
+
+
+def _cap_coverage(evidence: list[Evidence], n_candidates: int, p: Params, notes: list[str], *,
+                  completed: frozenset[str] = frozenset(),
+                  mtime_of: Callable[[str], int | None] = lambda path: None) -> list[Evidence]:
+    """Drop evidence groups that link to (nearly) all candidates, or to many in a machine's shape.
 
     Per kind, a unit is either the evidence directly in one directory or the
-    evidence anywhere below one directory (excluding ``/``). Minimal covering
-    units (covering, with no covering sub-unit) are dropped; then, if the
-    remaining evidence of that kind still covers, it is dropped as a whole.
+    evidence anywhere below one directory (excluding ``/``). A unit's share
+    is the larger of (candidates it names / all candidates) and (completed
+    runs it names / completed runs, see :func:`_completed_runs`). A unit
+    *covers* when its share reaches ``coverage_cap``, or when its share of
+    all candidates lies in the ambiguous band ``[machine_band,
+    coverage_cap)`` and it is machine-shaped (:func:`_machine_shaped`). Minimal covering units (covering, with no
+    covering sub-unit) are dropped; then, if the remaining evidence of that
+    kind still reaches the cap, it is dropped as a whole.
     """
+    def shares(group: list[Evidence]) -> tuple[float, float]:
+        named = {e.candidate for e in group}
+        done = len(named & completed) / len(completed) if completed else 0.0
+        return len(named) / n_candidates, done
+
+    def share(group: list[Evidence]) -> float:
+        return max(shares(group))
+
+    def describe(group: list[Evidence]) -> str:
+        every, done = shares(group)
+        if done > every:
+            return f"covers {done:.0%} of the {len(completed)} completed runs"
+        return f"covers {every:.0%} of candidates"
+
+    def covers(group: list[Evidence]) -> str | None:
+        if share(group) >= p.coverage_cap:
+            return f"{describe(group)} (mirror/index/pipeline)"
+        every, _ = shares(group)
+        machine = _machine_shaped(group, mtime_of) if every >= p.machine_band else None
+        return f"covers {every:.0%} of candidates and is machine-shaped: {machine}" if machine else None
+
     kept: list[Evidence] = []
     for kind in sorted({e.kind for e in evidence}):
         items = [e for e in evidence if e.kind == kind]
@@ -475,22 +889,19 @@ def _cap_coverage(evidence: list[Evidence], n_candidates: int, cap: float, notes
                 units.setdefault(("tree", a), []).append(e)
                 a = posixpath.dirname(a)
 
-        covering = {u for u, group in units.items() if len({e.candidate for e in group}) / n_candidates >= cap}
+        covering = {u: why for u, group in units.items() if (why := covers(group))}
         # A covering tree is minimal unless its direct files or a child tree also cover.
         not_minimal = {("tree", u[1]) for u in covering if u[0] == "direct"}
         not_minimal |= {("tree", posixpath.dirname(u[1])) for u in covering if u[0] == "tree"}
         dropped: set[int] = set()
-        for unit in sorted(covering - not_minimal):
+        for unit in sorted(set(covering) - not_minimal):
             group = units[unit]
             dropped.update(id(e) for e in group)
-            share = len({e.candidate for e in group}) / n_candidates
-            notes.append(f"dropped {len(group)} {kind} links from {unit[1]}: covers {share:.0%} of "
-                         "candidates (mirror/index/pipeline)")
+            notes.append(f"dropped {len(group)} {kind} links from {unit[1]}: {covering[unit]}")
         rest = [e for e in items if id(e) not in dropped]
-        share = len({e.candidate for e in rest}) / n_candidates
-        if rest and share >= cap:
-            notes.append(f"dropped {len(rest)} {kind} links across all curated dirs: covers {share:.0%} of "
-                         "candidates (mirror/index/pipeline)")
+        if rest and share(rest) >= p.coverage_cap:
+            notes.append(f"dropped {len(rest)} {kind} links across all curated dirs: {describe(rest)} "
+                         "(mirror/index/pipeline)")
             continue
         kept.extend(rest)
     return kept
@@ -521,13 +932,13 @@ def detect(inv: Inventory, *, params: Params | None = None, hooks: Hooks | None 
     p = params or Params()
     h = hooks or Hooks()
     feats = all_features(inv, tz_offset_s=p.tz_offset_s)
-    roots, copies = _split_copies(_find_roots(inv, feats, p), p)
+    roots, copies = _campaign_roots(inv, feats, p)
     ctx = _Context(inv, feats, roots, copies)
     reports = []
     for root in roots:
         tainted = functools.cache(functools.partial(is_tainted, anchor=root.path))
-        curated = _curated_dirs(ctx, root, p, tainted)
         notes = list(root.notes)
+        curated = _curated_dirs(ctx, root, p, tainted, notes)
         if not curated:
             notes.append("no curated directories found")
         report = CampaignReport(
@@ -539,13 +950,16 @@ def detect(inv: Inventory, *, params: Params | None = None, hooks: Hooks | None 
             selection_confidence=0.0, notes=notes,
         )
         by_id = {c.id: c for c in report.candidates}
-        evidence = _builtin_evidence(ctx, root, curated, tainted)
+        evidence = _builtin_evidence(ctx, root, curated, tainted, p)
         for hook in (h.text_mentions, h.graduation):
             evidence += _check_hook_evidence(hook(inv, report), by_id, root.path)
         unique: dict[tuple[str, str, str], Evidence] = {}
         for e in evidence:
             unique.setdefault((e.kind, e.candidate, e.src), e)
-        for e in _cap_coverage(list(unique.values()), report.n_candidates, p.coverage_cap, report.notes):
+        completed = _completed_runs(report, p) if p.cap_completed else frozenset()
+        mtime_of = lambda path: inv.by_path[path].mtime if path in inv.by_path else None  # noqa: E731
+        for e in _cap_coverage(list(unique.values()), report.n_candidates, p, report.notes, completed=completed,
+                               mtime_of=mtime_of):
             by_id[e.candidate].evidence.append(e)
         for c in report.candidates:
             c.evidence.sort(key=lambda e: (e.kind, e.src))

@@ -77,7 +77,6 @@ _GPCR_CANDS = _ids("run_cpd{:03d}", range(1, 7))
         "final target lies inside exactly one candidate."
     ),
     expected=exact(GPCR_ROOT, ["run_cpd003"], [c for c in _GPCR_CANDS if c != "run_cpd003"]),
-    known_gap="symlink: chains are resolved one hop only; a chain ending inside exactly one candidate should count",
 )
 def build_symlink_chain_pick() -> Inventory:
     """The writer's GPCR campaign with a clean 10-hop chain from analysis/ into ``run_cpd003``."""
@@ -216,7 +215,6 @@ def _pool(tb: TreeBuilder, root: str, md_fmt: str, md_idx: Iterable[int], misc_i
         "cue: a same-signature, single-submitter, co-temporal subset of >=4 siblings."
     ),
     expected=exact(POOL_ROOT, ["proj_002"], ["proj_001", "proj_003", "proj_004"]),
-    known_gap="campaign_root: uniform subset inside a heterogeneous template group is not isolated",
 )
 def build_numbered_siblings_md_subset() -> Inventory:
     """The writer's original ``numbered_siblings_heterogeneous`` tree plus a copy-out of ``proj_002``."""
@@ -236,8 +234,6 @@ MINORITY_ROOT = "/vol9/groupshare/projects"
         "template group of >=4 uniform runs, however outnumbered."
     ),
     expected=exact(MINORITY_ROOT, ["proj_032_md"], ["proj_031_md", "proj_033_md", "proj_034_md"]),
-    known_gap=("campaign_root: only the largest template group of a parent is evaluated, so a minority group "
-               "of uniform runs is never scored (and would fail template_fraction=0.6 if it were)"),
 )
 def build_minority_template_campaign() -> Inventory:
     """34 children: proj_001..proj_030 (non-MD) and proj_031_md..proj_034_md (one AMBER batch)."""

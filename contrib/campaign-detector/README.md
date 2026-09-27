@@ -38,7 +38,7 @@ python3 -m campaign_detector synth --list
 ```
 
 `demo` prints `scenario | kind | expected | got | status` for every
-registered scenario. Status is PASS/FAIL, or XFAIL/XPASS for scenarios with a
+registered scenario (70: 69 PASS and 1 XFAIL, see "Remaining known gaps"). Status is PASS/FAIL, or XFAIL/XPASS for scenarios with a
 `known_gap`; it exits 1 on any FAIL or XPASS (an XPASS means the gap closed:
 remove `known_gap`).
 
@@ -65,22 +65,55 @@ directory and must not count. Expected: exactly that campaign root; picked
 
 ## Detection pipeline (`detect.detect`)
 
-1. **Featurize** every directory (`features.all_features`).
+1. **Featurize** every directory (`features.all_features`). A Desmond
+   `<job>_trj/` directory is part of the level that holds it: its `frame*`
+   files and `clickme.dtr` are TRAJ and count at that level's depth, so the
+   trajectory folds into its run.
 2. **Campaign roots.** Directories are evaluated deepest first. `P`
    qualifies when the largest group `G` of child dirs sharing a
    `name_template` has at least `min_candidates` members, covers
    `template_fraction` of the child dirs, has signature `uniformity` >= 0.75,
    a modal signature with >= `min_md_classes` MD classes including TRAJ,
    aggregate trajectory byte fraction >= 0.5 and uid purity >= 0.9 over G's
-   files (depth <= 2), and confidence
+   files (depth <= 2), a **topology** (`require_topology`: TOPO in the modal
+   signature, or a TOPO file directly in `P`, in a non-member child dir such
+   as `setup/`, or in `P`'s parent; no MD engine runs without one, while
+   ocean/climate netCDF passes every other gate), and confidence
    `0.3*uniformity + 0.2*classes/6 + 0.2*traj_frac + 0.15*regularity + 0.15*purity`
-   >= `campaign_conf`. When `P` qualifies, roots found inside its members are
-   discarded (a replica level such as `rep#` or `lambda_#.#` folds into its
-   candidate) unless at least half of the members hold a non-replica root:
-   then the members are campaigns in their own right (`batch1..batch4`) and
-   `P` is not a root. A root whose trajectory hashes are >= `copy_overlap`
-   later copies (by ctime) of another root's is a mirror/backup, not a
-   campaign; the original gets a note.
+   >= `campaign_conf`.
+   **Batches** (`batch_subsets`): when `G` fails, every template group is
+   tried again restricted to its members with the most common TRAJ-bearing
+   signature. Such a batch skips the template-fraction gate but must pass
+   every other gate and have one submitter (uid purity) and run windows
+   that overlap or follow each other within `batch_max_gap_s` (7 days). A
+   campaign is a batch of runs, and the name template is evidence of one,
+   not its definition: four co-submitted runs among 26 unrelated
+   `proj_###` folders, or an outnumbered `proj_###_md` group, are found; five
+   runs by five people over five years are not.
+   When `P` qualifies, roots found inside its members are discarded (a
+   replica level such as `rep#` or `lambda_#.#` folds into its candidate)
+   unless at least half of the members hold a non-replica root: then the
+   members are campaigns in their own right (`batch1..batch4`) and `P` is
+   not a root. A **replica-level root** that nothing absorbs is dropped when
+   its own directory is one of >= 2 templated sibling runs
+   (`drop_replica_roots`: three ligands x four replicas are three
+   candidates, not three campaigns; a lone `clone_001..clone_024` stays).
+   **Mirrors.** A root whose trajectory hashes are >= `copy_overlap` copies
+   of another root's is a mirror/backup, not a campaign; the original is
+   the root that ranks first by (not tainted relative to the other, more
+   **provenance**, earlier chunk ctime). Provenance (`mirror_provenance`) is
+   a submit/workflow script in the root or its parent, plus a non-member
+   directory beside the runs (`analysis/` in the root or a sibling of it),
+   so a working copy restored from its DR mirror (later ctimes, but the only
+   one with `submit_all.sh` and `analysis/`) stays the campaign. The
+   original gets a note.
+   **Compute happened** (`min_run_span_s`): a root whose median member run
+   window (first MD file to last trajectory chunk) is under one hour is
+   dropped: a `cp -r` of course kits (every file carries the copy instant)
+   or a screen that crashed minutes into its first chunk. Mirrors are split
+   off before this gate, so a copy that did not keep mtimes is still
+   recognised as a copy. `root_verdicts(inv)` reports, for every directory
+   with >= `min_candidates` child dirs, `"root"` or the gate that rejected it.
 3. **Taint.** A path with a `NEG_WORDS` token (`old`, `bak`, `trash`, ...)
    in any component below its common ancestor with the campaign root is
    never an evidence source or curated dir.
@@ -89,28 +122,96 @@ directory and must not count. Expected: exactly that campaign root; picked
    approval word or version marker in their name or in ancestor names below
    the campaign root's parent (the root's own name excluded), derived
    fraction >= 0.5, working-hours fraction >= 0.6 of entries, all entries
-   newer than the last chunk, an owner other than the submitter, and an
-   irregular non-templated name with child-name diversity >= 0.5. Score >=
-   `curated_score` is curated.
+   newer than this campaign's last chunk (`t_end`), an owner other than the
+   submitter, and an irregular non-templated name with child-name diversity
+   >= 0.5. Score >= `curated_score` is curated, unless the **script-cadence
+   veto** (`script_cadence`) fires: the dir is owned by the submitter and is
+   written like the job's own output, either (a) first written within
+   `script_onset_s` (1 h) after the campaign's last chunk *and* at least one
+   entry per `script_density_s` (10 s), or (b) id-named files of >= 3
+   candidates sit at the same offset (within 10 s) from each candidate's
+   own last chunk (a per-job epilogue). Hard links are ignored by the veto
+   (their mtime belongs to the inode). Either signal alone is ordinary for
+   a person on the submitter's account and does not veto. The report notes
+   every vetoed dir.
 5. **Evidence** from the direct children of curated dirs: `hardlink` (1.0,
    shared inode with nlink > 1 and equal size, mtime and uid) else
-   `copy_out` (1.0, sha256) when the file
-   matches files of exactly one candidate; `symlink` (1.0) when the resolved
-   target lies in exactly one candidate; `derived` (0.7) for a
-   `DERIVED_EXTS` file newer than the campaign whose `id_tokens` intersect the
-   candidate's; `graduation` (0.5) for an untainted dir outside every campaign
-   root, newer than the campaign, whose name carries the candidate id; then
-   the `Hooks` (their evidence must use a known kind, a candidate id of the
-   report and a normalized absolute `src`, else `ValueError`).
+   `copy_out` (1.0, sha256) when the file matches files of exactly one
+   candidate; `symlink` (1.0) when the link's chain reaches exactly one
+   candidate (followed hop by hop up to `symlink_max_hops`, stopping at a
+   loop or a dangling end; the first path inside a candidate wins);
+   `derived` (0.7) for a `DERIVED_EXTS` file newer than the campaign whose
+   `id_tokens` intersect the candidate's, unless its hash occurs in >= 2
+   candidates (`derived_uniqueness`: boilerplate named after the reference
+   run) and only from a curated dir that is **local** to the campaign
+   (`derived_locality`: on the root's volume and within the root's parent,
+   `derived_locality_levels` = 1) or that also holds link evidence into it;
+   `graduation` (0.5) for an untainted dir outside every campaign root,
+   newer than the campaign, whose name carries the candidate id (global, and
+   below the pick threshold alone); then the `Hooks` (their evidence must
+   use a known kind, a candidate id of the report and a normalized absolute
+   `src`, else `ValueError`).
 6. **Coverage cap.** Per evidence kind, evidence units are "the files
-   directly in dir D" and "everything below dir D". Every minimal unit whose
-   distinct candidates reach `coverage_cap` of the campaign is dropped with a
-   note; if what remains of that kind still reaches the cap it is dropped too.
+   directly in dir D" and "everything below dir D". A unit's share is the
+   larger of (candidates it names / all candidates) and, when some runs
+   fell short but at least half and at least `min_candidates` finished,
+   (completed runs it names / completed runs) (`cap_completed`; completed =
+   the campaign's maximum chunk count). A unit covers when its share
+   reaches `coverage_cap`, or when its share of all candidates is in the
+   ambiguous band [`machine_band`, `coverage_cap`) = [0.5, 0.8) and it is
+   machine-shaped: >= 90% of its byte copies keep the source basename, or it
+   was written in one burst at a regular cadence in candidate-id order.
+   Every minimal covering unit is dropped with a note; if what remains of
+   that kind still reaches the cap it is dropped too.
 7. **Labels.** Score = sum of weights; `picked` at >= `pick_threshold`,
    `unknown` below; with no pick every candidate is `unknown`, otherwise
    zero-evidence candidates are `not_picked`.
    `selection_confidence = mean(max weight per pick) * (1 - picks/candidates)`;
-   below `selection_conf` all labels revert to `unknown` with a note.
+   below `selection_conf` all labels revert to `unknown` with a note. The
+   comparison stays `<`: the human-shaped 70% shortlist
+   (`positive_hardening_twins.human_shaped_70`) sits exactly on 0.30, and
+   its machine-shaped twin is caught by step 6, not by this backstop.
+
+### Hardening (unit C1): gaps, rules, knobs and guards
+
+Every rule has a `Params` knob; switching it off reopens exactly the gaps
+listed and nothing else (`tests/test_hardening.py` checks each knob and
+pins, per negative, the gate that rejects every would-be root).
+
+| gap (scenario) | rule | knob | guards that stay put |
+|---|---|---|---|
+| `negative_machine_bulk.roms_ensemble` | topology required | `require_topology` | `lidar_station` (still rejected by byte fraction), every positive |
+| `negative_md_lookalikes.md_course_single_student`, `failed_screen_partial` | compute happened | `min_run_span_s` | `amber_examples`, `md_course`, `failed_screen`; `four_candidates_boundary` |
+| `negative_copies.rsync_mirror` | mirror provenance before ctime | `mirror_provenance` | `mirror_backup`, `backup_only_analysis`, twin `mirror_snapshot_with_picks` |
+| `negative_pathological.few_candidates_replicated` | replica-level roots of sibling runs are dropped | `drop_replica_roots` | `symlink_to_replica`, lambda/rep positives |
+| `positive_pathological_links.numbered_siblings_md_subset`, `minority_template_campaign` | batches | `batch_subsets`, `batch_max_gap_s` | `numbered_siblings_heterogeneous` |
+| `positive_gromacs_replicates.abl_md`, `positive_desmond_fep.kdr_fep_plus` | `id_tokens` accept `letters[_-]digits` | (vocabulary) | `docking_pose_same_numbers` (`cmpd012` never meets `lig012`) |
+| `negative_mismatched.stem_collision`, `library_beside_unrelated_md`, `graduation_false_friend_summary` | derived locality | `derived_locality`, `derived_locality_levels` | twin `stem_collision_with_copy` (locality by evidence), `kdr_fep` |
+| `negative_automation.reference_run_protocol_bundle` | derived uniqueness | `derived_uniqueness` | every derived positive |
+| `positive_pathological_links.symlink_chain_pick` | symlink chains | `symlink_max_hops` | `symlink_pathology` |
+| `negative_automation.submission_postprocess`, `per_job_epilogue_daytime` | script cadence | `script_cadence`, `script_onset_s`, `script_density_s` | twin `same_account_analysis`, every positive analysis dir |
+| `negative_automation.qc_symlink_farm_two_thirds`, `negative_copies.coverage_cap_70` | coverage vs completed runs; machine-shaped band | `cap_completed`, `machine_band` | twin `human_shaped_70` |
+| real Desmond layout (no scenario before) | `<job>_trj/frame*` is TRAJ, `.ene` is LOG | (classification) | twin `desmond_trj_fep` |
+
+The coverage row's two negatives are each caught by either of its two rules alone.
+
+## Remaining known gaps
+
+- `positive_identity_graduation.kdr_then_abl` stays XFAIL on purpose.
+  lig029's only trace is its InChIKey reappearing under another compound
+  name in a later campaign; no inventory metadata carries identity.
+  `content.detect_with_content` picks it (`tests/test_content_pipeline.py`).
+- Limits of the new rules, not yet encoded as scenarios: a campaign whose
+  median run lasts under an hour is not detected (`min_run_span_s`), even a
+  genuine screen of very short runs; a copy that did not preserve mtimes is
+  only recognised as a mirror when its original is in the inventory;
+  derived-only picks from a curated dir two levels above the root need
+  `derived_locality_levels=2` (the default follows the reviewed rule); a
+  top-level root of `rep#`/`lambda_#` members that is itself one of
+  several templated siblings is dropped even if the siblings are not runs.
+- Scenario module docstrings (and their "Adversarial review" sections)
+  describe the detector before hardening; the `known_gap` arguments were
+  removed as each gap closed, and the tables above supersede those texts.
 
 ## Public API
 
@@ -121,7 +222,7 @@ directory and must not count. Expected: exactly that campaign root; picked
 - `normalize_path(p)` — normalized absolute POSIX path; `ValueError` if relative.
 - `Entry(path, kind, size, mtime, ctime, uid, gid, inode, nlink, sha256=None, target=None)` — frozen row; properties `name`, `parent` (`None` for `/`), `stem`, `ext`; `resolved_target()`.
 - `Inventory(entries)` — strict collection (every entry but `/` needs its parent dir; no duplicates) with `by_path`, `by_sha`, `by_inode`, `children()`, `parent()`, `subtree()`, `dirs()`, `files()`, `links()`, iteration by path, `len`, `in`.
-- `Inventory.from_tsv(src)` / `Inventory.to_tsv(dst)` — TSV with header, UTF-8 + `surrogateescape`, empty cell = `None`.
+- `Inventory.from_tsv(src)` / `Inventory.to_tsv(dst)` — TSV with header, UTF-8 + `surrogateescape`, empty cell = `None`. Rows end at `\n` (or `\r\n`) only, so a carriage return inside a name round-trips; `to_tsv` refuses a last cell ending in `\r`.
 
 ### `campaign_detector.features`
 
@@ -130,8 +231,8 @@ directory and must not count. Expected: exactly that campaign root; picked
 - `at(day, hour, minute=0)`, `workday(k)` — synthetic calendar helpers (negative values go back in time).
 - `POS_WORDS`, `NEG_WORDS`, `REPLICA_WORDS`, `DERIVED_EXTS`, `MD_CLASSES`, `MD_CLASS_NAMES`, `SCHED_RE`, `ENGINE_EXTS` — vocabularies.
 - `tokens(name)`, `word_hits(name, words)`, `has_version_marker(name)`, `template_key(name)`, `is_templated(name)`, `id_tokens(name)`, `id_token(name)` — name analysis.
-- `classify_name(name)`, `classify(entry)` — MD class of a file.
-- `engine_vote(files)`, `dominant(values)`, `chunk_index(entry)`, `chunk_regularity(chunks)`, `count_bursts(mtimes)`, `files_within(inv, path, max_depth=2)`, `jaccard(a, b)` — building blocks.
+- `classify_name(name)`, `classify_path(path)`, `classify(entry)` — MD class of a file; `classify_path` knows Desmond `<job>_trj/frame*` (TRAJ), and compression suffixes in `COMPRESSION_EXTS` are stripped first. `is_trj_dir(name)`, `is_trj_frame(name)` — the Desmond trajectory-directory predicates.
+- `engine_vote(files)`, `dominant(values)`, `chunk_index(entry)`, `chunk_regularity(chunks)`, `count_bursts(mtimes)`, `files_within(inv, path, max_depth=2)` (a `<job>_trj` dir does not consume depth), `jaccard(a, b)` — building blocks.
 - `DirFeatures` — per-directory feature record (field docs in the class docstring).
 - `dir_features(inv, path, *, tz_offset_s=0)`, `all_features(inv, *, tz_offset_s=0)` — featurizer.
 - `sibling_uniformity(inv, feats, parent_path)` — `(group, uniformity, template_fraction, mode_sig)`.
@@ -140,7 +241,7 @@ directory and must not count. Expected: exactly that campaign root; picked
 
 - `T0`, `at`, `workday` — re-exported time helpers.
 - `TreeBuilder(root="/vol1", *, uid=1000, gid=1000, mtime=T0)` — `dir()`, `file()`, `symlink()`, `copy()`, `hardlink()`, `build()`.
-- `CampaignSpec`, `ENGINE_PROFILES`, `md_campaign(tb, root, spec)` — MD campaign layout; returns candidate dir names.
+- `CampaignSpec`, `ENGINE_PROFILES`, `md_campaign(tb, root, spec)` — MD campaign layout; returns candidate dir names. Profiles: `amber`, `gromacs`, `desmond` (synthetic `traj###.dcd`), `desmond_trj` (the real layout: `md-in.cms`, `md.msj`, `md.cfg`, `md_trj/frame###`, `md_trj/clickme.dtr`, `md-out.cms`, `md.ene`, `md.log`, `md.cpt`, `job.o<id>`), `namd`.
 - `AnalysisSpec`, `human_analysis(tb, parent, spec)` — human analysis dir; returns its path.
 - `pick_by_copy(tb, campaign_root, dst_dir, cids, ...)`, `pick_by_symlink(tb, dst_dir, campaign_root, cids, ...)`, `pick_by_derived(tb, dst_dir, cids, ...)` — selection fingerprints (note the argument order differs; pass by keyword if unsure).
 - `ExpectedOutcome` with `no_campaign()`, `campaign_no_selection(root, cids=())`, `selection(root, picked, not_picked=(), unknown=(), rest=None)`.
@@ -154,6 +255,7 @@ directory and must not count. Expected: exactly that campaign root; picked
 - `Hooks(text_mentions=no_evidence, graduation=no_evidence)`, `EvidenceHook`, `no_evidence` — extension points.
 - `is_within(path, ancestor)`, `is_tainted(path, anchor="/")` — path predicates.
 - `detect(inv, *, params=None, hooks=None)` — run the pipeline.
+- `root_verdicts(inv, *, params=None)` — `{dir: "root" | gate}` for every directory with >= `min_candidates` child dirs (gates: `template_fraction`, `uniformity`, `min_md_classes`, `no_traj`, `traj_byte_fraction`, `uid_purity`, `no_topology`, `campaign_conf`, `min_candidates`, `members_are_campaigns`, `absorbed_by:<root>`, `replica_level`, `mirror_copy`, `no_compute`; batch attempts follow as `|batch:<gate>`).
 
 ### `campaign_detector.scenarios` and `campaign_detector.cli`
 
@@ -239,6 +341,30 @@ directory and must not count. Expected: exactly that campaign root; picked
   it does not gate the campaign.
 - `missing_ids` is empty when the id range is more than ten times the number
   of candidates or the names differ outside their last digit run.
+- Hardening (unit C1) adds `Params.require_topology`, `min_run_span_s`,
+  `batch_subsets`, `batch_max_gap_s`, `drop_replica_roots`,
+  `mirror_provenance`, `derived_locality`, `derived_locality_levels`,
+  `derived_uniqueness`, `symlink_max_hops`, `script_cadence`,
+  `script_onset_s`, `script_density_s`, `cap_completed` and `machine_band`
+  (see the table in "Detection pipeline"), plus `root_verdicts()`.
+- `id_tokens` accepts one `_` or `-` between the letters and the digits
+  (`cmpd_017` and `lig-007` give `cmpd017`/`cmpd17`, `lig007`/`lig7`);
+  `id_token` (used by the synthetic pick helpers to name files) is
+  unchanged, so scenario builds are byte-identical.
+- The campaign root's gates run in the order `min_candidates`,
+  `template_fraction`, `uniformity`, `min_md_classes`, `no_traj`,
+  `traj_byte_fraction`, `uid_purity`, `no_topology`, `campaign_conf`, so a
+  scenario keeps the gate its reviewer documented.
+- The mirror gate ranks by taint, provenance, then ctime (was ctime only);
+  the note says "copies of this campaign's" rather than "later copies".
+- `classify` looks at the path: files named `frame*` or `clickme.dtr` inside
+  a `<job>_trj` directory are TRAJ; `.ene` is LOG and votes Desmond;
+  `.tpr` is TOPO and votes GROMACS; `.gz`/`.bz2`/`.xz`/`.zst` are stripped
+  before the extension is read (`.sdf.gz`, `.oeb.gz`, `.maegz` stay OTHER).
+- The coverage cap may drop a unit below `coverage_cap` (completed-runs
+  share, machine-shaped band); `tests/test_detect.py::
+  test_broad_selection_reverts_to_unknown` now switches the band off to
+  exercise the selection-confidence backstop alone.
 
 ## Real filesystems: materialize and walk
 
@@ -290,7 +416,10 @@ python3 -m campaign_detector walk --root /nfs/projects/KDR --out kdr.tsv [--hash
 - Errors never abort the walk: an `OSError` opening or listing a directory
   (EACCES, ESTALE, EIO) skips its subtree, one on an entry skips the entry,
   and a name or symlink target holding a tab, newline or carriage return
-  (not representable in the TSV) is skipped as `EINVAL`. Each goes to `on_error` (re-raise there to abort) and
+  (not representable in the TSV) is skipped as `EINVAL`. Since hardening,
+  `Inventory.from_tsv` ends rows at `\n` only, so a carriage return in a
+  name would round-trip; the walker's exclusion of `\r` (and its comment
+  in `walker.py`, outside this unit) is now merely conservative. Each goes to `on_error` (re-raise there to abort) and
   to the inventory's `walk_errors` list; the `walk` CLI prints them and
   exits 1 after writing the TSV. Sockets, fifos and devices are skipped.
 - Round trip (`tests/test_walker.py`): the KDR scenario materialized and
@@ -386,7 +515,7 @@ their sidecar facts):
 
 | scenario | registry expectation (`detect`) | `detect_with_content` |
 |---|---|---|
-| `positive_identity_graduation.kdr_then_abl` | lig029 picked with `known_gap` graduation (XFAIL: identity is invisible to metadata) | lig029 picked via ABL_2013 `cpd03` (same InChIKey, new name) |
+| `positive_identity_graduation.kdr_then_abl` | lig029 picked with `known_gap` graduation (XFAIL by design: identity is invisible to metadata; the one gap hardening leaves open) | lig029 picked via ABL_2013 `cpd03` (same InChIKey, new name) |
 | `positive_identity_graduation.kdr_then_abl_copyout` | lig012, lig041 picked (copy-out) | also lig029 (graduation) and lig035 (`notes.txt` mention) |
 | `negative_identity.rerun_all` | no picks | no picks: all 46 keys re-run in 2014, coverage cap |
 | `negative_identity.in_backup` | no picks | no picks: keys only under `backup/` and `bak/` |
@@ -397,8 +526,7 @@ and are checked by `tests/test_content_pipeline.py`. A positive scenario
 must declare picks, so `kdr_then_abl` registers its true answer with a
 known gap instead of the inventory-only "no pick".
 
-Known limits: the synthetic Desmond profile writes `traj###.dcd`, not real
-`<job>_trj/frame*` directories, and the detector finds no campaign in a
-real Desmond layout (extension-less frames are not TRAJ for
-`features.classify`). The content manifest handles them; the detector does
-not yet.
+Desmond layouts: the synthetic `desmond` profile writes `traj###.dcd`; the
+`desmond_trj` profile writes the real `<job>_trj/frame*` layout, which the
+detector now reads as TRAJ folded into its run
+(`positive_hardening_twins.desmond_trj_fep`), as the content manifest does.

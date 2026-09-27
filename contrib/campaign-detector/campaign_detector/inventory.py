@@ -165,20 +165,25 @@ class Inventory:
 
     @classmethod
     def from_tsv(cls, src: str | os.PathLike[str] | TextIO) -> Inventory:
-        """Read an inventory written by :meth:`to_tsv` (path or open text stream)."""
+        """Read an inventory written by :meth:`to_tsv` (path or open text stream).
+
+        A path is opened with ``newline="\\n"`` so only ``\\n`` (or ``\\r\\n``) ends
+        a row and a carriage return inside a name survives; an open stream
+        must do the same.
+        """
         if isinstance(src, (str, os.PathLike)):
-            with open(src, encoding="utf-8", errors="surrogateescape", newline="") as fh:
+            with open(src, encoding="utf-8", errors="surrogateescape", newline="\n") as fh:
                 return cls._read(fh)
         return cls._read(src)
 
     @classmethod
     def _read(cls, fh: TextIO) -> Inventory:
-        header = fh.readline().rstrip("\n").split("\t")
+        header = fh.readline().removesuffix("\n").removesuffix("\r").split("\t")
         if tuple(header) != COLUMNS:
             raise ValueError(f"unexpected TSV header: {header!r}")
         entries = []
         for lineno, line in enumerate(fh, start=2):
-            line = line.rstrip("\n")
+            line = line.removesuffix("\n").removesuffix("\r")  # \r\n from an editor; to_tsv never ends a row in \r
             if not line:
                 continue
             cells = line.split("\t")
@@ -219,5 +224,7 @@ class Inventory:
                 if "\t" in cell or "\n" in cell:
                     raise ValueError(f"tab or newline in {col} of {e.path!r}")
                 cells.append(cell)
+            if cells[-1].endswith("\r"):
+                raise ValueError(f"trailing carriage return in the last column of {e.path!r}")
             buf.write("\t".join(cells) + "\n")
         fh.write(buf.getvalue())

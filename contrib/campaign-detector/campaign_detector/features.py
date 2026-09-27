@@ -88,11 +88,11 @@ DERIVED_EXTS = frozenset({
 """Extensions of small human-made artifacts (plots, sheets, slides, notes)."""
 
 MD_CLASSES: dict[str, frozenset[str]] = {
-    "TOPO": frozenset({".prmtop", ".parm7", ".top", ".psf", ".gro", ".cms"}),
+    "TOPO": frozenset({".prmtop", ".parm7", ".top", ".psf", ".gro", ".cms", ".tpr"}),
     "INPUT": frozenset({".in", ".mdp", ".inp", ".cfg", ".conf", ".namd", ".msj"}),
     "TRAJ": frozenset({".nc", ".dcd", ".xtc", ".trr", ".mdcrd"}),
     "RESTART": frozenset({".rst7", ".rst", ".ncrst", ".cpt", ".chk", ".xsc", ".coor", ".vel"}),
-    "LOG": frozenset({".out", ".log", ".edr", ".mdout", ".err"}),
+    "LOG": frozenset({".out", ".log", ".edr", ".mdout", ".err", ".ene"}),
 }
 """MD file classes by extension; ``SCHED`` is matched by name (``SCHED_RE``)."""
 
@@ -104,8 +104,8 @@ MD_CLASS_NAMES: tuple[str, ...] = ("TOPO", "INPUT", "TRAJ", "RESTART", "LOG", "S
 
 ENGINE_EXTS: dict[str, frozenset[str]] = {
     "amber": frozenset({".prmtop", ".parm7", ".rst7", ".ncrst", ".nc", ".in"}),
-    "gromacs": frozenset({".top", ".mdp", ".xtc", ".trr", ".cpt", ".edr", ".gro"}),
-    "desmond": frozenset({".cms", ".cfg", ".msj"}),
+    "gromacs": frozenset({".top", ".mdp", ".xtc", ".trr", ".cpt", ".edr", ".gro", ".tpr"}),
+    "desmond": frozenset({".cms", ".cfg", ".msj", ".ene"}),
     "namd": frozenset({".psf", ".namd", ".inp", ".xsc", ".coor", ".dcd"}),
 }
 """Extensions that vote for each MD engine."""
@@ -114,6 +114,7 @@ _CAMEL_RE = re.compile(r"([a-z])([A-Z])")
 _SPLIT_RE = re.compile(r"[^a-z0-9]+")
 _ALNUM_RE = re.compile(r"[a-z]+|\d+")
 _ID_RE = re.compile(r"[a-z]+\d+")
+_ID_SEP_RE = re.compile(r"([a-z]+)[_-]?(\d+)")
 _VERSION_RE = re.compile(r"^v\d+$")
 _TEMPLATED_RE = re.compile(r"^[a-z0-9_.\-]+$")
 _DIGITS_RE = re.compile(r"\d+")
@@ -164,15 +165,16 @@ def is_templated(name: str) -> bool:
 
 
 def id_tokens(name: str) -> set[str]:
-    """All ``[a-z]+\\d+`` runs of the lower-cased name plus zero-stripped variants.
+    """Candidate-id tokens of a name: ``letters[_-]?digits`` runs, joined, plus zero-stripped variants.
 
-    ``lig017_rmsd.png`` -> ``{"lig017", "lig17"}``.
+    ``lig017_rmsd.png`` -> ``{"lig017", "lig17"}``; ``cmpd_017_rmsd.png`` and
+    ``lig-017.png`` give the same tokens as ``cmpd017``/``lig017``. The
+    letters are always kept, so ``cmpd012`` never meets ``lig012``.
     """
     out: set[str] = set()
-    for m in _ID_RE.findall(name.lower()):
-        out.add(m)
-        letters = m.rstrip("0123456789")
-        out.add(letters + str(int(m[len(letters):])))
+    for letters, digits in _ID_SEP_RE.findall(name.lower()):
+        out.add(letters + digits)
+        out.add(letters + str(int(digits)))
     return out
 
 
@@ -182,12 +184,37 @@ def id_token(name: str) -> str | None:
     return max(runs, key=len) if runs else None
 
 
+COMPRESSION_EXTS = frozenset({".gz", ".bz2", ".xz", ".zst"})
+"""Compression suffixes stripped before classification (``complex.prmtop.gz`` is TOPO)."""
+
+
+def is_trj_dir(name: str) -> bool:
+    """True for a Desmond trajectory directory name (``<job>_trj``)."""
+    return name.lower().endswith("_trj") and len(name) > 4
+
+
+def is_trj_frame(name: str) -> bool:
+    """True for a file Desmond writes inside ``<job>_trj/`` as the trajectory (``frame*``, ``clickme.dtr``)."""
+    lower = name.lower()
+    return lower.startswith("frame") or lower == "clickme.dtr"
+
+
 def classify_name(name: str) -> str:
-    """MD class of a file name: TOPO, INPUT, TRAJ, RESTART, LOG, SCHED, DERIVED or OTHER."""
+    """MD class of a file name: TOPO, INPUT, TRAJ, RESTART, LOG, SCHED, DERIVED or OTHER.
+
+    A compression suffix (``.gz``, ``.bz2``, ``.xz``, ``.zst``) is stripped
+    first, so ``complex.prmtop.gz`` is TOPO and ``poses.sdf.gz`` or
+    ``pv.maegz`` are OTHER. A name with a directory part is classified by
+    :func:`classify_path` rules (``md_trj/frame001`` is TRAJ).
+    """
+    if "/" in name:
+        return classify_path(name)
     lower = name.lower()
     if SCHED_RE.search(lower):
         return "SCHED"
-    ext = posixpath.splitext(lower)[1]
+    stem, ext = posixpath.splitext(lower)
+    if ext in COMPRESSION_EXTS:
+        ext = posixpath.splitext(stem)[1]
     for cls, exts in MD_CLASSES.items():
         if ext in exts:
             return cls
@@ -196,9 +223,18 @@ def classify_name(name: str) -> str:
     return "OTHER"
 
 
+def classify_path(path: str) -> str:
+    """MD class of a file path: a trajectory frame inside a Desmond ``<job>_trj/`` directory is TRAJ,
+    anything else is classified by its name (:func:`classify_name`)."""
+    parent, name = posixpath.split(path)
+    if is_trj_dir(posixpath.basename(parent)) and is_trj_frame(name):
+        return "TRAJ"
+    return classify_name(name)
+
+
 def classify(entry: Entry) -> str:
-    """MD class of a file entry (see :func:`classify_name`)."""
-    return classify_name(entry.name)
+    """MD class of a file entry (see :func:`classify_path`)."""
+    return classify_path(entry.path)
 
 
 def engine_vote(files: Iterable[Entry]) -> str:
@@ -222,19 +258,26 @@ def chunk_index(entry: Entry) -> int | None:
 
 
 def files_within(inv: Inventory, path: str, max_depth: int = 2) -> list[Entry]:
-    """Regular files at depth 1..``max_depth`` below ``path`` (symlinks not followed)."""
+    """Regular files at depth 1..``max_depth`` below ``path`` (symlinks not followed).
+
+    A Desmond ``<job>_trj`` directory is part of the level that holds it:
+    its files count at that level's depth, so a trajectory folds into its run.
+    """
     out: list[Entry] = []
     level = [path]
     for _ in range(max_depth):
         nxt: list[str] = []
-        for d in level:
+        while level:
+            d = level.pop()
             for c in inv.children(d):
                 if c.kind == "f":
                     out.append(c)
+                elif c.kind == "d" and is_trj_dir(c.name):
+                    level.append(c.path)
                 elif c.kind == "d":
                     nxt.append(c.path)
         level = nxt
-    return out
+    return sorted(out, key=lambda e: e.path)
 
 
 def jaccard(a: Iterable[str], b: Iterable[str]) -> float:
