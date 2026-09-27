@@ -18,8 +18,8 @@ from dataclasses import dataclass
 
 from .features import (
     DERIVED_EXTS, MD_CLASS_NAMES, NEG_WORDS, POS_WORDS, REPLICA_WORDS, DirFeatures, all_features, classify,
-    count_bursts, dominant, era, files_within, has_version_marker, id_tokens, is_working_hours, sibling_uniformity, tokens,
-    word_hits,
+    count_bursts, dominant, era, files_within, has_version_marker, id_tokens, is_working_hours, sibling_uniformity,
+    tokens, word_hits,
 )
 from .inventory import Entry, Inventory, normalize_path
 
