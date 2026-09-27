@@ -95,3 +95,14 @@ def test_carriage_return_in_a_name_round_trips(tmp_path) -> None:
     inv.to_tsv(dst)
     back = Inventory.from_tsv(dst)
     assert "/a/odd\rname.nc" in back and len(back) == 3
+
+
+def test_crlf_rows_are_read_and_a_trailing_cr_is_refused(tmp_path) -> None:
+    good = tmp_path / "ok.tsv"
+    _tree().to_tsv(good)
+    crlf = tmp_path / "crlf.tsv"
+    crlf.write_bytes(good.read_bytes().replace(b"\n", b"\r\n"))
+    assert [e.path for e in Inventory.from_tsv(crlf)] == [e.path for e in _tree()]
+    bad = Inventory([_d("/", 1), Entry("/l", "l", 2, 1, 1, 0, 0, 2, 1, target="x\r")])
+    with pytest.raises(ValueError):
+        bad.to_tsv(tmp_path / "bad.tsv")

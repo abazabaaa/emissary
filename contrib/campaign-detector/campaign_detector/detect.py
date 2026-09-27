@@ -59,19 +59,22 @@ class Params:
     batch_max_gap_s: int = 7 * 86400
     """Largest idle gap between the run windows of a batch (one submission, overlapping or back-to-back)."""
     drop_replica_roots: bool = True
-    """Drop a replica-level root (``rep#``, ``lambda_#``) that no outer campaign absorbs."""
+    """Drop a replica-level root (``rep#``, ``lambda_#``) of one of several templated sibling runs that no
+    outer campaign absorbs (too few siblings to be a campaign themselves)."""
     mirror_provenance: bool = True
     """Mirror gate: taint and provenance (submit script, analysis dir) outrank ctime."""
     derived_locality: bool = True
     """Derived evidence counts only from a curated dir local to the campaign or holding link evidence into it."""
+    derived_locality_levels: int = 1
+    """Locality radius: a curated dir within the root's parent (1) or grandparent (2) on the same volume."""
     derived_uniqueness: bool = True
     """A derived-extension file whose hash occurs in >= 2 candidates is boilerplate, not derived evidence."""
     symlink_max_hops: int = 40
     """Symlink chains are followed up to this many hops (loops stop earlier)."""
     script_cadence: bool = True
-    """A submitter-owned dir written like a script (onset, density or offset lock) is never curated."""
+    """A submitter-owned dir written like a script (onset + density, or offset lock) is never curated."""
     script_onset_s: int = 3600
-    """Onset lock: a submitter-owned dir first written within this long after the last chunk is the job's."""
+    """Onset lock: first write within this long after the campaign's last chunk (needs density too)."""
     script_density_s: int = 10
     """Density/offset lock tolerance: one entry per this many seconds, or offsets equal within it."""
     cap_completed: bool = True
@@ -255,14 +258,21 @@ _SCRIPT_EXTS = frozenset({".sh", ".bash", ".csh", ".zsh", ".slurm", ".sbatch", "
 """Extensions of submission scripts and workflow files a campaign root keeps beside its runs."""
 
 
-def _run_window(inv: Inventory, member: str) -> tuple[int, int] | None:
-    """``(first MD-file mtime, last trajectory mtime)`` of one member (depth <= 2), ``None`` without TRAJ."""
-    md = [(f, classify(f)) for f in files_within(inv, member, 2)]
-    md = [(f, c) for f, c in md if c in MD_CLASS_NAMES]
-    trajs = [f.mtime for f, c in md if c == "TRAJ"]
+def _run_window(files: list[Entry], cls: dict[str, str]) -> tuple[int, int] | None:
+    """``(first MD-file mtime, last trajectory mtime)`` of one member's files, ``None`` without TRAJ."""
+    md = [f for f in files if cls[f.path] in MD_CLASS_NAMES]
+    trajs = [f.mtime for f in md if cls[f.path] == "TRAJ"]
     if not trajs:
         return None
-    return min(f.mtime for f, _ in md), max(trajs)
+    return min(f.mtime for f in md), max(trajs)
+
+
+def _shared_topology(inv: Inventory, path: str, members: set[str]) -> bool:
+    """True when a TOPO file sits where runs share one: directly in the root, in a non-member child
+    dir of the root (``setup/``, ``common/``), or directly in the root's parent."""
+    places = [path, posixpath.dirname(path)]
+    places += [c.path for c in inv.children(path) if c.kind == "d" and c.path not in members]
+    return any(c.kind == "f" and classify(c) == "TOPO" for d in places for c in inv.children(d))
 
 
 def _cotemporal(windows: list[tuple[int, int]], max_gap_s: int) -> bool:
@@ -295,19 +305,20 @@ def _evaluate_group(inv: Inventory, feats: dict[str, DirFeatures], path: str, gr
         return "min_md_classes"
     if "TRAJ" not in classes:
         return "no_traj"
-    files = [f for m in group for f in files_within(inv, m, 2)]
+    per_member = {m: files_within(inv, m, 2) for m in group}
+    files = [f for m in group for f in per_member[m]]
+    cls = {f.path: classify(f) for f in files}
     total = sum(f.size for f in files)
-    trajs = [f for f in files if classify(f) == "TRAJ"]
+    trajs = [f for f in files if cls[f.path] == "TRAJ"]
     traj_frac = sum(f.size for f in trajs) / total if total else 0.0
     submitter, purity = dominant(f.uid for f in files)
     if traj_frac < p.traj_byte_fraction:
         return "traj_byte_fraction"
     if purity < p.uid_purity:
         return "uid_purity"
-    if p.require_topology and "TOPO" not in classes and not any(
-            c.kind == "f" and classify(c) == "TOPO" for c in inv.children(path)):
+    if p.require_topology and "TOPO" not in classes and not _shared_topology(inv, path, set(group)):
         return "no_topology"
-    by_member = {m: _run_window(inv, m) for m in group}
+    by_member = {m: _run_window(per_member[m], cls) for m in group}
     windows = [w for w in by_member.values() if w is not None]
     if batch and not _cotemporal(windows, p.batch_max_gap_s):
         return "batch_not_cotemporal"
@@ -391,6 +402,19 @@ def _is_replica_level(template: str) -> bool:
     return bool(set(tokens(template)) & REPLICA_WORDS)
 
 
+def _is_candidate_replica_level(inv: Inventory, feats: dict[str, DirFeatures], root: _Root) -> bool:
+    """True when ``root``'s members are a replica level (``rep#``) *and* ``root`` itself is one of
+    >= 2 templated siblings (``run_x001``, ``run_x002``): the replicas of a candidate, not a campaign.
+
+    A lone directory of ``clone_001..clone_024`` stays a campaign.
+    """
+    if not _is_replica_level(root.template):
+        return False
+    tpl = feats[root.path].name_template
+    parent = posixpath.dirname(root.path)
+    return sum(1 for c in inv.children(parent) if c.kind == "d" and feats[c.path].name_template == tpl) >= 2
+
+
 def _find_roots(inv: Inventory, feats: dict[str, DirFeatures], p: Params,
                 verdicts: dict[str, str] | None = None) -> list[_Root]:
     """Qualifying roots, deepest first; an outer root absorbs roots inside its members.
@@ -424,7 +448,7 @@ def _find_roots(inv: Inventory, feats: dict[str, DirFeatures], p: Params,
         verdict[d.path] = "root"
     out = []
     for path in sorted(found):
-        if p.drop_replica_roots and _is_replica_level(found[path].template):
+        if p.drop_replica_roots and _is_candidate_replica_level(inv, feats, found[path]):
             verdict[path] = "replica_level"
         else:
             out.append(found[path])
@@ -434,12 +458,14 @@ def _find_roots(inv: Inventory, feats: dict[str, DirFeatures], p: Params,
 
 
 def _provenance(inv: Inventory, root: _Root) -> int:
-    """Signs that ``root`` is where the campaign was run: a submit script beside the runs (1) and a
-    non-member directory such as ``analysis/`` inside the root (1)."""
+    """Signs that ``root`` is where the campaign was run, 0-2: a submit script or workflow file in the
+    root or its parent (1), and a non-member directory beside the runs, such as ``analysis/`` in the
+    root or a sibling of the root (1)."""
     members = set(root.group)
-    kids = inv.children(root.path)
-    script = any(c.kind == "f" and (c.ext in _SCRIPT_EXTS or word_hits(c.stem, {"submit"})) for c in kids)
-    side_dir = any(c.kind == "d" and c.path not in members for c in kids)
+    parent = posixpath.dirname(root.path)
+    near = inv.children(root.path) + inv.children(parent)
+    script = any(c.kind == "f" and (c.ext in _SCRIPT_EXTS or word_hits(c.stem, {"submit"})) for c in near)
+    side_dir = any(c.kind == "d" and c.path not in members and c.path != root.path for c in near)
     return int(script) + int(side_dir)
 
 
@@ -451,24 +477,26 @@ def _split_copies(inv: Inventory, roots: list[_Root], p: Params) -> tuple[list[_
     order: not tainted relative to the other root (``backup/``, ``old/``),
     more provenance (:func:`_provenance`: a submit script, an analysis dir),
     earlier chunk ctime. The original gets a note. Provenance before ctime
-    matters when a working copy was restored from its own mirror.
+    matters when a working copy was restored from its own mirror; a whole
+    project mirror has the same provenance, so ctime decides.
     """
-    def rank(r: _Root, other: _Root) -> tuple[bool, int, int]:
-        provenance = _provenance(inv, r) if p.mirror_provenance else 0
-        return is_tainted(r.path, anchor=other.path), -provenance, r.first_ctime
+    prov = {r.path: _provenance(inv, r) if p.mirror_provenance else 0 for r in roots}
 
-    copies: list[_Root] = []
+    def rank(r: _Root, other: _Root) -> tuple[bool, int, int]:
+        return is_tainted(r.path, anchor=other.path), -prov[r.path], r.first_ctime
+
+    copies: dict[str, _Root] = {}
     for r in roots:
         for other in roots:
-            if other is r or not r.traj_shas or other in copies:
+            if other is r or not r.traj_shas or other.path in copies:
                 continue
             overlap = len(r.traj_shas & other.traj_shas) / len(r.traj_shas)
             if overlap >= p.copy_overlap and rank(other, r) < rank(r, other):
-                copies.append(r)
+                copies[r.path] = r
                 other.notes.append(f"ignored {r.path}: {overlap:.0%} of its trajectory chunks are copies of this "
                                    "campaign's (mirror/backup)")
                 break
-    return [r for r in roots if r not in copies], copies
+    return [r for r in roots if r.path not in copies], list(copies.values())
 
 
 def _campaign_roots(inv: Inventory, feats: dict[str, DirFeatures], p: Params,
@@ -568,28 +596,33 @@ class _Context:
 def _script_shaped(entries: list[Entry], root: _Root, p: Params) -> str | None:
     """Why a directory written under the submitter's uid looks like the job's own output, else ``None``.
 
-    Signals (any one suffices): onset lock (first write within
-    ``script_onset_s`` after the campaign's last chunk), write
-    density (every entry written within ``script_density_s`` per entry),
-    and per-candidate offset lock (id-named files of >= 3 candidates land at
-    the same offset, within ``script_density_s``, from each candidate's own
-    last chunk). A person working in the same account arrives later and
-    writes by hand. Hard links are ignored: their mtime and uid belong to
-    the linked inode, not to the act of linking.
+    Two signals: the job's own finish (onset lock *and* write density: the
+    first write within ``script_onset_s`` after the campaign's last chunk,
+    and every entry within ``script_density_s`` per entry), or a per-job
+    epilogue (offset lock: id-named files of >= 3 candidates land at the
+    same offset, within ``script_density_s``, from each candidate's own last
+    chunk). Either alone is ordinary for a person on the same account (who
+    may start right after the runs end, or make links in one shell loop).
+    Hard links are ignored: their mtime and uid belong to the linked inode,
+    not to the act of linking.
     """
     entries = [e for e in entries if e.kind == "l" or e.nlink == 1]
     if not entries:
         return None
     mtimes = sorted(e.mtime for e in entries)
-    if root.t_end <= mtimes[0] <= root.t_end + p.script_onset_s:
-        return f"first write {mtimes[0] - root.t_end} s after the campaign's last chunk"
-    if len(mtimes) >= 3 and mtimes[-1] - mtimes[0] <= p.script_density_s * (len(mtimes) - 1):
-        return f"{len(mtimes)} entries written within {mtimes[-1] - mtimes[0]} s"
+    onset = root.t_end <= mtimes[0] <= root.t_end + p.script_onset_s
+    dense = len(mtimes) >= 3 and mtimes[-1] - mtimes[0] <= p.script_density_s * (len(mtimes) - 1)
+    if onset and dense:
+        return (f"first write {mtimes[0] - root.t_end} s after the campaign's last chunk, "
+                f"{len(mtimes)} entries within {mtimes[-1] - mtimes[0]} s")
     ends = {posixpath.basename(m): t for m, t in root.run_ends.items()}
-    by_token = {tok: cid for cid in ends for tok in id_tokens(cid)}
+    by_token: dict[str, set[str]] = {}
+    for cid in ends:
+        for tok in id_tokens(cid):
+            by_token.setdefault(tok, set()).add(cid)
     offsets: dict[str, int] = {}
     for e in entries:
-        named = {by_token[t] for t in id_tokens(e.name) if t in by_token}
+        named = set().union(*(by_token.get(t, set()) for t in id_tokens(e.name)))
         if len(named) == 1:
             cid = named.pop()
             offsets[cid] = min(offsets.get(cid, e.mtime - ends[cid]), e.mtime - ends[cid])
@@ -660,9 +693,13 @@ def _volume(path: str) -> str:
     return path.split("/", 2)[1] if path != "/" else ""
 
 
-def _is_local(path: str, root: _Root) -> bool:
-    """True when ``path`` is on the campaign's volume and within the root's parent (locality rule)."""
-    return _volume(path) == _volume(root.path) and is_within(path, posixpath.dirname(root.path))
+def _is_local(path: str, root: _Root, levels: int = 1) -> bool:
+    """True when ``path`` is on the campaign's volume and within the root's ``levels``-th ancestor
+    (1 = the root's parent; locality rule)."""
+    anchor = root.path
+    for _ in range(levels):
+        anchor = posixpath.dirname(anchor)
+    return _volume(path) == _volume(root.path) and is_within(path, anchor)
 
 
 def _follow_symlink(inv: Inventory, link: Entry, cands: dict[str, str], max_hops: int) -> tuple[str, str] | None:
@@ -737,7 +774,7 @@ def _builtin_evidence(ctx: _Context, root: _Root, curated: list[CuratedDir], tai
                 if hit is not None:
                     links.append(Evidence("symlink", hit[0], e.path, hit[1], EVIDENCE_WEIGHTS["symlink"]))
         out.extend(links)
-        if not p.derived_locality or links or _is_local(cd.path, root):
+        if not p.derived_locality or links or _is_local(cd.path, root, p.derived_locality_levels):
             out.extend(derived)
     for d in ctx.outside_roots:
         if d.mtime <= root.t_end or tainted(d.path):
@@ -780,13 +817,16 @@ def _completed_runs(report: CampaignReport, p: Params) -> frozenset[str]:
 def _machine_shaped(group: list[Evidence], mtime_of: Callable[[str], int | None]) -> str | None:
     """Why a set of evidence looks machine-made, else ``None``.
 
-    (a) >= 0.9 of it keeps the source basename (a mirror layout, not a
-    person's renames); (b) it was written in one burst at a regular cadence
-    (interval regularity >= 0.9) in candidate-id order, as a loop does.
+    (a) >= 0.9 of its byte copies (``copy_out``/``hardlink``) keep the
+    source basename (a mirror layout, not a person's renames; a symlink
+    named after its target is just ``ln -s``); (b) it was written in one
+    burst at a regular cadence (interval regularity >= 0.9) in
+    candidate-id order, as a loop does.
     """
-    kept = sum(1 for e in group if posixpath.basename(e.src) == posixpath.basename(e.ref))
-    if kept >= 0.9 * len(group):
-        return f"{kept} of {len(group)} keep the source name"
+    copies = [e for e in group if e.kind in ("copy_out", "hardlink")]
+    kept = sum(1 for e in copies if posixpath.basename(e.src) == posixpath.basename(e.ref))
+    if copies and kept >= 0.9 * len(copies):
+        return f"{kept} of {len(copies)} copies keep the source name"
     first: dict[str, int] = {}
     for e in group:
         t = mtime_of(e.src)
@@ -810,25 +850,32 @@ def _cap_coverage(evidence: list[Evidence], n_candidates: int, p: Params, notes:
     evidence anywhere below one directory (excluding ``/``). A unit's share
     is the larger of (candidates it names / all candidates) and (completed
     runs it names / completed runs, see :func:`_completed_runs`). A unit
-    *covers* when its share reaches ``coverage_cap``, or when it lies in the
-    ambiguous band ``[machine_band, coverage_cap)`` and is machine-shaped
-    (:func:`_machine_shaped`). Minimal covering units (covering, with no
+    *covers* when its share reaches ``coverage_cap``, or when its share of
+    all candidates lies in the ambiguous band ``[machine_band,
+    coverage_cap)`` and it is machine-shaped (:func:`_machine_shaped`). Minimal covering units (covering, with no
     covering sub-unit) are dropped; then, if the remaining evidence of that
     kind still reaches the cap, it is dropped as a whole.
     """
-    def share(group: list[Evidence]) -> float:
+    def shares(group: list[Evidence]) -> tuple[float, float]:
         named = {e.candidate for e in group}
-        out = len(named) / n_candidates
-        if completed:
-            out = max(out, len(named & completed) / len(completed))
-        return out
+        done = len(named & completed) / len(completed) if completed else 0.0
+        return len(named) / n_candidates, done
+
+    def share(group: list[Evidence]) -> float:
+        return max(shares(group))
+
+    def describe(group: list[Evidence]) -> str:
+        every, done = shares(group)
+        if done > every:
+            return f"covers {done:.0%} of the {len(completed)} completed runs"
+        return f"covers {every:.0%} of candidates"
 
     def covers(group: list[Evidence]) -> str | None:
-        s = share(group)
-        if s >= p.coverage_cap:
-            return f"covers {s:.0%} of candidates (mirror/index/pipeline)"
-        machine = _machine_shaped(group, mtime_of) if s >= p.machine_band else None
-        return f"covers {s:.0%} of candidates and is machine-shaped: {machine}" if machine else None
+        if share(group) >= p.coverage_cap:
+            return f"{describe(group)} (mirror/index/pipeline)"
+        every, _ = shares(group)
+        machine = _machine_shaped(group, mtime_of) if every >= p.machine_band else None
+        return f"covers {every:.0%} of candidates and is machine-shaped: {machine}" if machine else None
 
     kept: list[Evidence] = []
     for kind in sorted({e.kind for e in evidence}):
@@ -853,8 +900,8 @@ def _cap_coverage(evidence: list[Evidence], n_candidates: int, p: Params, notes:
             notes.append(f"dropped {len(group)} {kind} links from {unit[1]}: {covering[unit]}")
         rest = [e for e in items if id(e) not in dropped]
         if rest and share(rest) >= p.coverage_cap:
-            notes.append(f"dropped {len(rest)} {kind} links across all curated dirs: covers {share(rest):.0%} of "
-                         "candidates (mirror/index/pipeline)")
+            notes.append(f"dropped {len(rest)} {kind} links across all curated dirs: {describe(rest)} "
+                         "(mirror/index/pipeline)")
             continue
         kept.extend(rest)
     return kept

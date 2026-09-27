@@ -88,7 +88,7 @@ DERIVED_EXTS = frozenset({
 """Extensions of small human-made artifacts (plots, sheets, slides, notes)."""
 
 MD_CLASSES: dict[str, frozenset[str]] = {
-    "TOPO": frozenset({".prmtop", ".parm7", ".top", ".psf", ".gro", ".cms"}),
+    "TOPO": frozenset({".prmtop", ".parm7", ".top", ".psf", ".gro", ".cms", ".tpr"}),
     "INPUT": frozenset({".in", ".mdp", ".inp", ".cfg", ".conf", ".namd", ".msj"}),
     "TRAJ": frozenset({".nc", ".dcd", ".xtc", ".trr", ".mdcrd"}),
     "RESTART": frozenset({".rst7", ".rst", ".ncrst", ".cpt", ".chk", ".xsc", ".coor", ".vel"}),
@@ -104,7 +104,7 @@ MD_CLASS_NAMES: tuple[str, ...] = ("TOPO", "INPUT", "TRAJ", "RESTART", "LOG", "S
 
 ENGINE_EXTS: dict[str, frozenset[str]] = {
     "amber": frozenset({".prmtop", ".parm7", ".rst7", ".ncrst", ".nc", ".in"}),
-    "gromacs": frozenset({".top", ".mdp", ".xtc", ".trr", ".cpt", ".edr", ".gro"}),
+    "gromacs": frozenset({".top", ".mdp", ".xtc", ".trr", ".cpt", ".edr", ".gro", ".tpr"}),
     "desmond": frozenset({".cms", ".cfg", ".msj", ".ene"}),
     "namd": frozenset({".psf", ".namd", ".inp", ".xsc", ".coor", ".dcd"}),
 }

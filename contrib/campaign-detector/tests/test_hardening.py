@@ -199,11 +199,20 @@ def test_same_account_human_stays_curated() -> None:
     assert picked == ["run_lig003", "run_lig011"]
 
 
+@pytest.mark.parametrize("times", [
+    # starts 20 minutes after the last chunk, but writes by hand over the afternoon
+    {"lig003_rmsd.png": T_END + 1200, "notes.txt": T_END + 5400, "lig011_rmsd.png": T_END + 9000},
+    # one shell loop weeks later (ln -s / cp of the chosen few)
+    {"lig003_rmsd.png": DAYS_LATER, "notes.txt": DAYS_LATER + 1, "lig011_rmsd.png": DAYS_LATER + 2},
+])
+def test_onset_or_density_alone_is_a_person(times: dict[str, int]) -> None:
+    picked, notes = _submitter_dir(times)
+    assert picked == ["run_lig003", "run_lig011"] and not any("not curated" in n for n in notes)
+
+
 @pytest.mark.parametrize("times, signal", [
-    ({"lig003_rmsd.png": T_END + 180, "notes.txt": T_END + 1500, "lig011_rmsd.png": T_END + 3000},
-     "first write 180 s after"),
-    ({"lig003_rmsd.png": DAYS_LATER, "notes.txt": DAYS_LATER + 1, "lig011_rmsd.png": DAYS_LATER + 2},
-     "entries written within"),
+    ({"lig003_rmsd.png": T_END + 180, "notes.txt": T_END + 181, "lig011_rmsd.png": T_END + 182},
+     "first write 180 s after the campaign's last chunk, 3 entries within 2 s"),
     ({f"lig{i:03d}_dG.png": _last_chunk(i) + 7200 for i in (22, 23, 24)} | {"notes.txt": DAYS_LATER},
      "after their own run's last chunk"),
 ])
@@ -291,3 +300,70 @@ def test_extended_minority_is_not_the_completed_set() -> None:
     tb.file("/vol1/p/analysis/notes.txt", size=3_000, mtime=at(21, 15), uid=3002)
     (rep,) = detect(tb.build()).campaigns
     assert rep.picked() == {f"run_lig{i:03d}" for i in EXTENDED}
+
+
+# -- review guards ----------------------------------------------------------------
+
+
+def test_a_lone_clone_campaign_is_not_a_replica_level() -> None:
+    tb = TreeBuilder("/vol3")
+    md_campaign(tb, "/vol3/ab/md", CampaignSpec(n_candidates=24, candidate_fmt="clone_{:03d}", n_chunks=6))
+    assert detect(tb.build()).campaign_roots == ["/vol3/ab/md"]
+
+
+def test_topology_in_a_tpr_or_a_shared_setup_dir() -> None:
+    tb = TreeBuilder("/vol1")
+    for i in range(1, 7):
+        run = f"/vol1/gmx/run{i:02d}"
+        tb.file(f"{run}/topol.tpr", size=3_000_000, mtime=at(0, 2), uid=2001)
+        tb.file(f"{run}/md.log", size=50_000, mtime=at(1, 2), uid=2001)
+        for k in range(1, 7):
+            tb.file(f"{run}/traj{k:03d}.xtc", size=900_000_000, mtime=at(0, 3) + k * 21600, uid=2001)
+    assert detect(tb.build()).campaign_roots == ["/vol1/gmx"]  # .tpr is a topology
+    tb = TreeBuilder("/vol1")
+    names = md_campaign(tb, "/vol1/fep", CampaignSpec(n_candidates=6, n_chunks=6))
+    inv = tb.build()
+    moved = TreeBuilder("/vol1")
+    for e in inv:
+        if e.kind == "f" and e.name != "complex.prmtop":
+            moved.file(e.path, size=e.size, mtime=e.mtime, uid=e.uid)
+    moved.file("/vol1/fep/setup/complex.prmtop", size=4_000_000, mtime=at(0, 2), uid=2001)
+    assert detect(moved.build()).campaign_roots == ["/vol1/fep"] and len(names) == 6
+
+
+def test_a_later_copy_with_its_own_script_does_not_outrank_the_original() -> None:
+    tb = TreeBuilder("/vol5")
+    md_campaign(tb, "/vol5/lab/proj/md", CampaignSpec(n_candidates=8, n_chunks=6))
+    tb.file("/vol5/lab/proj/submit_all.sh", size=1_500, mtime=at(0, 2), uid=2001)
+    snap = tb.build()
+    for e in snap.subtree("/vol5/lab/proj/md"):
+        if e.kind == "f":
+            tb.file("/vol5/home/stu/course/md" + e.path[len("/vol5/lab/proj/md"):], size=e.size, mtime=e.mtime,
+                    uid=e.uid, content_id=e.path, ctime=at(300, 10))
+    tb.file("/vol5/home/stu/course/md/rerun.sh", size=900, mtime=at(300, 11), uid=4100)
+    assert detect(tb.build()).campaign_roots == ["/vol5/lab/proj/md"]
+
+
+def test_ln_s_of_run_dirs_keeps_names_but_is_not_a_mirror() -> None:
+    """7 of 12 finished runs (24 total) symlinked by name over several days: 29% of candidates, a pick."""
+    tb = TreeBuilder("/vol1")
+    crashed = frozenset(range(2, 25, 2))
+    md_campaign(tb, "/vol1/p/dock", CampaignSpec(n_candidates=24, n_chunks=10, skip=crashed))
+    md_campaign(tb, "/vol1/p/dock", CampaignSpec(n_candidates=24, n_chunks=4, skip=frozenset(range(1, 25)) - crashed))
+    chosen = (17, 3, 21, 9, 13, 1, 23)
+    for n, i in enumerate(chosen):
+        tb.symlink(f"/vol1/p/selected/run_lig{i:03d}", f"../dock/run_lig{i:03d}", mtime=at(20 + n, 11 + n % 3),
+                   uid=3002)
+    tb.file("/vol1/p/selected/notes.txt", size=2_000, mtime=at(22, 16), uid=3002)
+    (rep,) = detect(tb.build()).campaigns
+    assert rep.picked() == {f"run_lig{i:03d}" for i in chosen}
+
+
+def test_locality_radius_is_a_parameter() -> None:
+    tb = TreeBuilder("/vol1")
+    md_campaign(tb, "/vol1/proj/md/production", CampaignSpec(n_candidates=12, n_chunks=6))
+    for n, name in enumerate(("lig007_rmsd.png", "notes.txt", "summary_v2.xlsx")):
+        tb.file(f"/vol1/proj/analysis/{name}", size=40_000, mtime=at(20 + n, 11), uid=3002)
+    inv = tb.build()
+    assert not detect(inv).campaigns[0].picked()  # two levels up and derived-only: not local by default
+    assert detect(inv, params=_off(derived_locality_levels=2)).campaigns[0].picked() == {"run_lig007"}
