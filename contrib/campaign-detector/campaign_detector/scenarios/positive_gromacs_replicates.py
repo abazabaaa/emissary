@@ -96,8 +96,6 @@ def _build(candidate_fmt: str) -> Inventory:
     description="GROMACS ABL1 triplicate MD: 30 cmpd_### x rep1..3 fold to 30 candidates; "
                 "picks 3 rep2 copies + 1 plot, old/ copy ignored",
     expected=_expected(UNDERSCORE_FMT),
-    known_gap="derived: id_tokens only sees letters immediately followed by digits, so 'cmpd_017' (and the "
-              "plot 'cmpd_017_rmsd_reps.png') yields no id token and the plot links to no candidate",
     name="abl_md",
 )
 def build_abl_md() -> Inventory:

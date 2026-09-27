@@ -30,6 +30,13 @@ def test_id_tokens() -> None:
     assert id_token("run_lig012") == "lig012" and id_token("analysis") is None
 
 
+def test_id_tokens_accept_a_separator_but_keep_the_prefix() -> None:
+    assert id_tokens("cmpd_017_rmsd_reps.png") == id_tokens("cmpd017") == {"cmpd017", "cmpd17"}
+    assert id_tokens("lig-007.png") == {"lig007", "lig7"}
+    assert not id_tokens("cmpd012_pose1.png") & id_tokens("run_lig012")  # B5 guard: prefix always kept
+    assert id_token("cmpd_017") is None  # id_token (synth naming) is unchanged
+
+
 @pytest.mark.parametrize("name, cls", [
     ("complex.prmtop", "TOPO"), ("prod.in", "INPUT"), ("prod001.nc", "TRAJ"), ("prod.rst7", "RESTART"),
     ("prod001.out", "LOG"), ("slurm-4100000.out", "SCHED"), ("job.o123", "SCHED"), ("fig3.png", "DERIVED"),
