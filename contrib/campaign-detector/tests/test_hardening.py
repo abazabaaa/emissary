@@ -206,3 +206,19 @@ def test_script_shaped_submitter_dir_is_not_curated(times: dict[str, int], signa
     picked, notes = _submitter_dir(times)
     assert picked == []
     assert any("not curated" in n and signal in n for n in notes)
+
+
+# -- coverage: completed runs and the machine-shaped band ----------------------
+
+
+@pytest.mark.parametrize("name", ["negative_automation.qc_symlink_farm_two_thirds", "negative_copies.coverage_cap_70"])
+def test_each_coverage_rule_alone_catches_the_finished_runs_farm(name: str) -> None:
+    inv = get(name).build()
+    for params in (Params(), _off(cap_completed=False), _off(machine_band=1.0)):
+        assert not detect(inv, params=params).campaigns[0].picked()
+    assert detect(inv, params=_off(cap_completed=False, machine_band=1.0)).campaigns[0].picked()
+
+
+def test_completed_runs_share_is_reported() -> None:
+    (rep,) = detect(get("negative_automation.qc_symlink_farm_two_thirds").build()).campaigns
+    assert any("dropped 16 symlink links" in n and "covers 100%" in n for n in rep.notes)

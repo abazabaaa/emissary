@@ -561,11 +561,6 @@ S8B_ANALYST = 3710
                 "strongest cue: machine shape (single constant-cadence burst in id order, preserved names, "
                 "set = finished runs) at 70% coverage, below the cap",
     expected=ExpectedOutcome.campaign_no_selection(S8B_ROOT, cids=_names(S8B_SPEC) + _names(S8B_CRASHED_SPEC)),
-    known_gap="coverage_cap: 21/30 = 70% is below the 0.8 cap and selection_confidence = 1.0*(1-21/30) = 0.30 is "
-              "not < selection_conf 0.30 (the revert test is '<', not '<='), so all 21 are picked; hardening "
-              "should drop a 0.5-0.8 unit that is machine-shaped (one regular burst in id order, >= 90% source "
-              "names preserved, or a set equal to the finished runs) instead of nudging the boundary, which "
-              "would also revert the human-shaped 70% positive twin (renames, several afternoons)",
     name="coverage_cap_70",
 )
 def build_coverage_cap_70() -> Inventory:
