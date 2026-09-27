@@ -568,8 +568,8 @@ class _Context:
 def _script_shaped(entries: list[Entry], root: _Root, p: Params) -> str | None:
     """Why a directory written under the submitter's uid looks like the job's own output, else ``None``.
 
-    Signals (any one suffices): onset lock (first write no later than
-    ``script_onset_s`` after the campaign's last chunk, or before it), write
+    Signals (any one suffices): onset lock (first write within
+    ``script_onset_s`` after the campaign's last chunk), write
     density (every entry written within ``script_density_s`` per entry),
     and per-candidate offset lock (id-named files of >= 3 candidates land at
     the same offset, within ``script_density_s``, from each candidate's own
@@ -581,8 +581,8 @@ def _script_shaped(entries: list[Entry], root: _Root, p: Params) -> str | None:
     if not entries:
         return None
     mtimes = sorted(e.mtime for e in entries)
-    if mtimes[0] <= root.t_end + p.script_onset_s:
-        return f"first write {mtimes[0] - root.t_end:+d} s from the campaign's last chunk"
+    if root.t_end <= mtimes[0] <= root.t_end + p.script_onset_s:
+        return f"first write {mtimes[0] - root.t_end} s after the campaign's last chunk"
     if len(mtimes) >= 3 and mtimes[-1] - mtimes[0] <= p.script_density_s * (len(mtimes) - 1):
         return f"{len(mtimes)} entries written within {mtimes[-1] - mtimes[0]} s"
     ends = {posixpath.basename(m): t for m, t in root.run_ends.items()}
@@ -764,13 +764,17 @@ def _check_hook_evidence(evidence: Iterable[Evidence], by_id: dict[str, Candidat
 def _completed_runs(report: CampaignReport, p: Params) -> frozenset[str]:
     """Ids of the candidates whose trajectory chunk count is the campaign maximum ("finished runs").
 
-    Empty unless some runs fell short and at least ``min_candidates`` finished,
-    so coverage against completed runs only applies where it can differ.
+    Empty unless some runs fell short while at least half of the candidates
+    and at least ``min_candidates`` finished: when only a minority reaches
+    the maximum, those runs were *extended* (often by the person choosing
+    them), not the normal outcome a script filters on.
     """
     counts = {c.id: c.features.traj_chunk_count for c in report.candidates}
     full = max(counts.values(), default=0)
     done = frozenset(cid for cid, n in counts.items() if n == full)
-    return done if p.min_candidates <= len(done) < len(counts) else frozenset()
+    if len(done) < p.min_candidates or 2 * len(done) < len(counts) or len(done) == len(counts):
+        return frozenset()
+    return done
 
 
 def _machine_shaped(group: list[Evidence], mtime_of: Callable[[str], int | None]) -> str | None:

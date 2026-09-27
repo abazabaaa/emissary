@@ -193,10 +193,15 @@ def test_same_account_human_stays_curated() -> None:
     picked, _ = _submitter_dir({"lig003_rmsd.png": DAYS_LATER, "notes.txt": DAYS_LATER + 1500,
                                 "lig011_rmsd.png": DAYS_LATER + 3000})
     assert picked == ["run_lig003", "run_lig011"]
+    # A plan written before the submission does not make the folder the job's own output.
+    picked, _ = _submitter_dir({"plan.md": _SUB.start - 86400, "lig003_rmsd.png": DAYS_LATER,
+                                "notes.txt": DAYS_LATER + 1500, "lig011_rmsd.png": DAYS_LATER + 3000})
+    assert picked == ["run_lig003", "run_lig011"]
 
 
 @pytest.mark.parametrize("times, signal", [
-    ({"lig003_rmsd.png": T_END + 180, "notes.txt": T_END + 1500, "lig011_rmsd.png": T_END + 3000}, "first write"),
+    ({"lig003_rmsd.png": T_END + 180, "notes.txt": T_END + 1500, "lig011_rmsd.png": T_END + 3000},
+     "first write 180 s after"),
     ({"lig003_rmsd.png": DAYS_LATER, "notes.txt": DAYS_LATER + 1, "lig011_rmsd.png": DAYS_LATER + 2},
      "entries written within"),
     ({f"lig{i:03d}_dG.png": _last_chunk(i) + 7200 for i in (22, 23, 24)} | {"notes.txt": DAYS_LATER},
@@ -269,3 +274,20 @@ def test_stem_collision_twin_needs_the_copy() -> None:
     kdr = reports["/vol2/projects/KDR_2011/fep"]
     assert {c.id: sorted(e.kind for e in c.evidence) for c in kdr.candidates if c.evidence} == {
         "run_lig029": ["copy_out", "derived"], "run_lig033": ["derived"]}
+
+
+EXTENDED = (3, 9, 15, 21)
+
+
+def test_extended_minority_is_not_the_completed_set() -> None:
+    """Four runs extended to 14 chunks (by the person who then keeps them) are a pick, not 'what finished'."""
+    tb = TreeBuilder("/vol1")
+    md_campaign(tb, "/vol1/p/md", CampaignSpec(n_candidates=24, n_chunks=10, skip=frozenset(EXTENDED)))
+    md_campaign(tb, "/vol1/p/md", CampaignSpec(n_candidates=24, n_chunks=14,
+                                               skip=frozenset(range(1, 25)) - set(EXTENDED)))
+    for n, i in enumerate(EXTENDED):
+        tb.copy(f"/vol1/p/md/run_lig{i:03d}/prod014.nc", f"/vol1/p/analysis/lig{i:03d}_keep_v{n}.nc",
+                mtime=at(20 + 2 * n, 11), uid=3002)
+    tb.file("/vol1/p/analysis/notes.txt", size=3_000, mtime=at(21, 15), uid=3002)
+    (rep,) = detect(tb.build()).campaigns
+    assert rep.picked() == {f"run_lig{i:03d}" for i in EXTENDED}
