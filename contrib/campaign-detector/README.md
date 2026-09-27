@@ -299,3 +299,106 @@ python3 -m campaign_detector walk --root /nfs/projects/KDR --out kdr.tsv [--hash
   names share an inode, and `detect()` returns an identical `to_dict()`:
   root `/vol3/projects/KDR_2011/fep`, picks lig012/lig029/lig041, 43 not
   picked, missing lig017/lig033.
+
+## Content readers (OpenEye / Schrödinger interface)
+
+The detector reads metadata only. `campaign_detector.content` adds an
+optional second pass that reads file *contents* through vendor-neutral,
+per-file readers and feeds the facts back through `detect.Hooks`. Nothing in
+the detector changes; with no content facts the result is identical to
+`detect()`. No licensed toolkit is needed to run or test it: a `FakeReader`
+serves facts that synthetic scenarios declare as sidecar TSVs.
+
+```sh
+python3 -m campaign_detector.content sidecar --scenario positive_identity_graduation.kdr_then_abl --out-dir /tmp/r_content
+python3 -m campaign_detector synth --scenario positive_identity_graduation.kdr_then_abl --out /tmp/r.tsv
+python3 -m campaign_detector detect --inventory /tmp/r.tsv                                      # inventory only: no pick
+python3 -m campaign_detector.content detect --inventory /tmp/r.tsv --content-dir /tmp/r_content  # lig029 picked (graduation)
+python3 -m campaign_detector.content winner --inventory /tmp/r.tsv --content-dir /tmp/r_content --out /tmp/winner.tsv
+python3 -m campaign_detector.content manifest --inventory /tmp/r.tsv [--json]
+```
+
+Modules (all stdlib; `model.py` imports nothing else, so a reader service
+can import it unchanged under `$SCHRODINGER/run python3` or an OpenEye venv):
+
+- `model`: `FileRef(path, sha256, size, mtime, file_class, fmt,
+  companions)`, `CandidateRecord` (root, candidate id, path, engine, era,
+  times, label, `unit` ligand/edge/leg/unknown, `replicas`, `files` by
+  class, global `key = "<root>::<id>"`), `LigandIdentity` (role, name,
+  `inchikey`, `inchikey14`, smiles, scaffold, `canon`, stereo, confidence,
+  source path/record), `Metric`, `Mention`, `ReaderResult`, the `Reader`
+  protocol (`name`, `version`, `cost`, `can_read(ref)`, `read(ref)`), and
+  the TSV helpers every content file uses (backslash escapes, empty = None).
+- `manifest`: `classify_content(entry)` / `classify_content_name(name)` use
+  their own table (the detector's `MD_CLASSES` stay untouched) with double
+  suffixes (`.oeb.gz`, `.sdf.gz`, `.maegz`), name patterns (`*_pv.maegz`,
+  `*-out.cms`, `*_out.fmp`, `multisim.log`) and Desmond `<job>_trj/`
+  directories, which become **one** TRAJ ref (`desmond.trj_dir`, size = sum
+  of its `frame*` files, companion `<job>-out.cms`).
+  `candidate_records(inv, result)` walks every candidate at any depth.
+- `registry`: `ReaderRegistry.register(reader, fmts=, engines=, priority=)`
+  (`"*"` = any format), `for_file(ref, engine)`, `read_file`,
+  `read_candidate(rec, max_cost=, cache=)`; a raising reader yields an error
+  result (not cached). `StubReader`/`stub_registry()` record which planned
+  service (`oe-reader`, `sdgr-reader`, `oss-reader`) takes which format.
+- `cache`: `ResultCache` keyed by `(sha256 or path|size|mtime, reader,
+  version)`; hits are re-bound to the requesting path; `save`/`load` write
+  five `cache_*.tsv` files.
+- `sidecar`: `SidecarBuilder.ligand/metric/mention(path, ...)`,
+  `write(scenario_or_builder, out_dir)` writes `ligands.tsv`, `metrics.tsv`
+  and `mentions.tsv` (sha256 copied from the inventory); `read(dir)`.
+  `fake_inchikey(smiles)` is 14 letters from `sha256("ik1:" + SMILES without
+  @ / \)`, a hyphen, 8 letters from `sha256("ik2:" + SMILES)`, then `SA-N`,
+  so stereo variants share `inchikey14` as real keys do.
+- `fake`: `FakeReader(content_dir)` accepts a file whose path (with a
+  matching sha) or sha256 the sidecars declare; deterministic.
+- `aggregate`: `aggregate(rec, results) -> CandidateContent` uses only files
+  inside the candidate; best identity by confidence, then support, then key;
+  flags `identity_agree`, `multiple_ligands`, `no_identity`; metric means.
+- `graduation`: `GraduationIndex.build(inv, result, contents, loose)` and
+  `.hook(strong=1.0, weak=0.5)` for `Hooks.graduation`. Evidence is emitted
+  when a candidate's InChIKey reappears **later** (occurrence time > the
+  campaign's `t_end`; occurrences in a campaign use that campaign's
+  `t_start`), **outside** the campaign root, **untainted** (`is_tainted`
+  against the root, so `backup/`, `bak/`, `old/` never count) and **not as
+  a byte copy** of a campaign file. Full-key matches with medium or high
+  confidence on both sides weigh `strong`; connectivity-block-only or
+  low-confidence matches weigh `weak` (below the pick threshold). The
+  coverage cap drops a re-run of every ligand.
+- `mentions`: `MentionIndex.hook(weight=0.7)` for `Hooks.text_mentions`
+  emits one `text_mention` per (document, candidate) for documents directly
+  in a curated dir of the campaign, matching `candidate_id` tokens,
+  `inchikey`, `compound_id` (ligand name) or `smiles`.
+- `pipeline`: `detect_with_content(inv, content_dir, *, params=None,
+  registry=None, cache=None) -> DetectionResult` and `run_content(inv,
+  registry, ...) -> ContentRun` (records, results, loose results, contents,
+  indexes). Pass 1 runs `detect`; candidate files and loose
+  STRUCT/RESULT/DERIVED files outside candidates are read and aggregated;
+  the indexes are built; pass 2 runs `detect` with the hooks.
+- `winner`: `winner_rows(result, aggregates, *, records=None,
+  include_unknown=True)` and `write_winner_tsv` give identity, `meta_*`
+  inventory features and `content_*` metrics. Leakage exclusions (tested):
+  no metric read outside the candidate dir or from a curated dir, no `exp_*`
+  metric (`exp_dg` is a label proxy), no score or evidence columns.
+
+Identity scenarios (a module-level `CONTENT = {short: builder}` declares
+their sidecar facts):
+
+| scenario | registry expectation (`detect`) | `detect_with_content` |
+|---|---|---|
+| `positive_identity_graduation.kdr_then_abl` | lig029 picked with `known_gap` graduation (XFAIL: identity is invisible to metadata) | lig029 picked via ABL_2013 `cpd03` (same InChIKey, new name) |
+| `positive_identity_graduation.kdr_then_abl_copyout` | lig012, lig041 picked (copy-out) | also lig029 (graduation) and lig035 (`notes.txt` mention) |
+| `negative_identity.rerun_all` | no picks | no picks: all 46 keys re-run in 2014, coverage cap |
+| `negative_identity.in_backup` | no picks | no picks: keys only under `backup/` and `bak/` |
+| `negative_identity.earlier` | no picks | no picks: keys only in an earlier pilot campaign and docking list |
+
+The content answers live in `positive_identity_graduation.CONTENT_EXPECTED`
+and are checked by `tests/test_content_pipeline.py`. A positive scenario
+must declare picks, so `kdr_then_abl` registers its true answer with a
+known gap instead of the inventory-only "no pick".
+
+Known limits: the synthetic Desmond profile writes `traj###.dcd`, not real
+`<job>_trj/frame*` directories, and the detector finds no campaign in a
+real Desmond layout (extension-less frames are not TRAJ for
+`features.classify`). The content manifest handles them; the detector does
+not yet.
