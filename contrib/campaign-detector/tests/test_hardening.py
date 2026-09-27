@@ -222,3 +222,50 @@ def test_each_coverage_rule_alone_catches_the_finished_runs_farm(name: str) -> N
 def test_completed_runs_share_is_reported() -> None:
     (rep,) = detect(get("negative_automation.qc_symlink_farm_two_thirds").build()).campaigns
     assert any("dropped 16 symlink links" in n and "covers 100%" in n for n in rep.notes)
+
+
+# -- Desmond layout and file names ----------------------------------------------
+
+
+@pytest.mark.parametrize("path, cls", [
+    ("/r/lig001/lambda_0.00/md_trj/frame001", "TRAJ"),
+    ("/r/lig001/md_trj/clickme.dtr", "TRAJ"),
+    ("/r/lig001/md_trj/metadata", "OTHER"),
+    ("/r/lig001/frame001", "OTHER"),  # a frame outside a _trj dir is not a trajectory
+    ("/r/lig001/md.ene", "LOG"),
+    ("/r/lig001/md-out.cms", "TOPO"),
+    ("/r/lig001/complex.prmtop.gz", "TOPO"),
+    ("/r/poses/hits.sdf.gz", "OTHER"),
+    ("/r/poses/hits.oeb.gz", "OTHER"),
+    ("/r/poses/dock_pv.maegz", "OTHER"),
+    ("/r/archive/run_pose001.tar.gz", "OTHER"),
+    ("/r/qm/conf001/opt_trj.xyz", "OTHER"),  # an _trj *file* stays what its extension says
+])
+def test_classify_paths(path: str, cls: str) -> None:
+    from campaign_detector.features import classify_path
+
+    assert classify_path(path) == cls
+
+
+def test_desmond_trj_frames_fold_into_their_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    import campaign_detector.features as features
+
+    inv = get("positive_hardening_twins.desmond_trj_fep").build()
+    (rep,) = detect(inv).campaigns
+    assert rep.engine == "desmond" and rep.n_candidates == 16
+    assert all(c.features.traj_chunk_count == 4 * 8 for c in rep.candidates)  # 4 lambda windows x 8 frames
+    monkeypatch.setattr(features, "is_trj_dir", lambda name: False)
+    assert detect(inv).campaigns == []  # before the rule: frames were OTHER and no root was found
+
+
+def test_human_shaped_70_is_not_machine_shaped() -> None:
+    (rep,) = detect(get("positive_hardening_twins.human_shaped_70").build()).campaigns
+    assert len(rep.picked()) == 21 and rep.selection_confidence == pytest.approx(0.3)
+    assert not any("machine-shaped" in n for n in rep.notes)
+
+
+def test_stem_collision_twin_needs_the_copy() -> None:
+    reports = {r.root: r for r in detect(get("positive_hardening_twins.stem_collision_with_copy").build()).campaigns}
+    kdr = reports["/vol2/projects/KDR_2011/fep"]
+    assert {c.id: sorted(e.kind for e in c.evidence) for c in kdr.candidates if c.evidence} == {
+        "run_lig029": ["copy_out", "derived"], "run_lig033": ["derived"]}

@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from .features import T0, at, classify_name, id_token, workday
+from .features import T0, at, classify_path, id_token, workday
 from .inventory import Entry, Inventory, normalize_path
 
 if TYPE_CHECKING:
@@ -173,9 +173,13 @@ ENGINE_PROFILES: dict[str, tuple[str, ...]] = {
     "gromacs": ("topol.top", "md.mdp", "traj{:03d}.xtc", "state.cpt", "md.log", "ener.edr", "slurm-{jobid}.out"),
     "desmond": ("system.cms", "config.cfg", "traj{:03d}.dcd", "checkpoint.chk", "run.log", "job.o{jobid}"),
     "namd": ("sys.psf", "prod.inp", "prod{:03d}.dcd", "prod.coor", "prod.log", "slurm-{jobid}.out"),
+    "desmond_trj": ("md-in.cms", "md.msj", "md.cfg", "md_trj/frame{:03d}", "md_trj/clickme.dtr", "md-out.cms",
+                    "md.ene", "md.log", "md.cpt", "job.o{jobid}"),
 }
 """File names of one run directory per engine: ``{:03d}`` = one per chunk
-(1-based), ``{jobid}`` = scheduler job id, anything else = one file."""
+(1-based), ``{jobid}`` = scheduler job id, anything else = one file.
+``desmond_trj`` is the real Desmond layout: ``-in.cms``/``-out.cms``, ``.msj``,
+``.ene`` and an ``md_trj/`` directory of extension-less ``frame###`` files."""
 
 _CLASS_SIZES = {"TOPO": 4_000_000, "INPUT": 2_048, "RESTART": 3_000_000, "LOG": 51_200, "SCHED": 51_200}
 _JOBID_BASE = 4_100_000
@@ -252,7 +256,7 @@ def md_campaign(tb: TreeBuilder, root: str, spec: CampaignSpec = CampaignSpec())
 
 def _run_file(tb: TreeBuilder, run_dir: str, name: str, mtime: int, root: str, spec: CampaignSpec) -> None:
     path = posixpath.join(run_dir, name)
-    cls = classify_name(name)
+    cls = classify_path(path)
     size = spec.chunk_size if cls == "TRAJ" else _CLASS_SIZES.get(cls, 1_024)
     content_id = f"{root}:boilerplate:{name}" if name in spec.boilerplate else None
     tb.file(path, size=size, mtime=mtime, uid=spec.uid, content_id=content_id)
