@@ -288,8 +288,6 @@ _ROMS_JOBID = 5_300_000
         "missing TOPO class or the file contents can reveal (.nc is also the Amber trajectory extension)."
     ),
     expected=ExpectedOutcome.no_campaign(),
-    known_gap=("campaign_root: .nc is ambiguous (netCDF climate/ocean/instrument data vs Amber trajectories); "
-               "needs content or sibling-class context such as the absence of any TOPO file"),
 )
 def build_roms_ensemble() -> Inventory:
     """Campaign-shaped non-MD ensemble whose netCDF output is indistinguishable from TRAJ by extension."""

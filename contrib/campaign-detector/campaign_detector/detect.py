@@ -50,6 +50,18 @@ class Params:
     selection_conf: float = 0.3
     tz_offset_s: int = 0
     copy_overlap: float = 0.8
+    require_topology: bool = True
+    """A campaign needs a TOPO file in its members' modal signature or directly in the root."""
+    min_run_span_s: int = 3600
+    """Median member run window (first MD file -> last trajectory chunk) a campaign needs: compute happened."""
+    batch_subsets: bool = True
+    """Also evaluate same-signature batches of every template group, not only the largest group."""
+    batch_max_gap_s: int = 7 * 86400
+    """Largest idle gap between the run windows of a batch (one submission, overlapping or back-to-back)."""
+    drop_replica_roots: bool = True
+    """Drop a replica-level root (``rep#``, ``lambda_#``) that no outer campaign absorbs."""
+    mirror_provenance: bool = True
+    """Mirror gate: taint and provenance (submit script, analysis dir) outrank ctime."""
 
 
 @dataclass
@@ -219,30 +231,77 @@ class _Root:
     notes: list[str]
     traj_shas: frozenset[str]
     first_ctime: int
+    run_span_s: float
 
 
-def _evaluate_root(inv: Inventory, feats: dict[str, DirFeatures], path: str, p: Params) -> _Root | None:
-    if feats[path].n_dirs < p.min_candidates:
+_SCRIPT_EXTS = frozenset({".sh", ".bash", ".csh", ".zsh", ".slurm", ".sbatch", ".pbs", ".job", ".fmp", ".msj"})
+"""Extensions of submission scripts and workflow files a campaign root keeps beside its runs."""
+
+
+def _run_window(inv: Inventory, member: str) -> tuple[int, int] | None:
+    """``(first MD-file mtime, last trajectory mtime)`` of one member (depth <= 2), ``None`` without TRAJ."""
+    md = [(f, classify(f)) for f in files_within(inv, member, 2)]
+    md = [(f, c) for f, c in md if c in MD_CLASS_NAMES]
+    trajs = [f.mtime for f, c in md if c == "TRAJ"]
+    if not trajs:
         return None
-    group, uniformity, tfrac, mode_sig = sibling_uniformity(inv, feats, path)
+    return min(f.mtime for f, _ in md), max(trajs)
+
+
+def _cotemporal(windows: list[tuple[int, int]], max_gap_s: int) -> bool:
+    """True when the run windows, sorted by start, never leave a gap longer than ``max_gap_s``."""
+    ordered = sorted(windows)
+    end = ordered[0][1]
+    for start, stop in ordered[1:]:
+        if start - end > max_gap_s:
+            return False
+        end = max(end, stop)
+    return True
+
+
+def _evaluate_group(inv: Inventory, feats: dict[str, DirFeatures], path: str, group: list[str], uniformity: float,
+                    tfrac: float, mode_sig: tuple[str, ...], p: Params, *, batch: bool) -> _Root | str:
+    """Apply the campaign-root gates to ``group`` (child dirs of ``path``); a gate name on rejection.
+
+    ``batch=True`` evaluates a same-signature subset of a template group
+    (:func:`_batches`): the template-fraction gate is replaced by the batch
+    definition (one submitter, run windows that overlap or follow each other).
+    """
     classes = {s.split(":", 1)[0] for s in mode_sig}
-    if (len(group) < p.min_candidates or tfrac < p.template_fraction or uniformity < p.uniformity
-            or len(classes) < p.min_md_classes or "TRAJ" not in classes):
-        return None
+    if len(group) < p.min_candidates:
+        return "min_candidates"
+    if not batch and tfrac < p.template_fraction:
+        return "template_fraction"
+    if uniformity < p.uniformity:
+        return "uniformity"
+    if len(classes) < p.min_md_classes:
+        return "min_md_classes"
+    if "TRAJ" not in classes:
+        return "no_traj"
     files = [f for m in group for f in files_within(inv, m, 2)]
     total = sum(f.size for f in files)
     trajs = [f for f in files if classify(f) == "TRAJ"]
     traj_frac = sum(f.size for f in trajs) / total if total else 0.0
     submitter, purity = dominant(f.uid for f in files)
-    if traj_frac < p.traj_byte_fraction or purity < p.uid_purity:
-        return None
+    if traj_frac < p.traj_byte_fraction:
+        return "traj_byte_fraction"
+    if purity < p.uid_purity:
+        return "uid_purity"
+    if p.require_topology and "TOPO" not in classes and not any(
+            c.kind == "f" and classify(c) == "TOPO" for c in inv.children(path)):
+        return "no_topology"
+    windows = [w for w in (_run_window(inv, m) for m in group) if w is not None]
+    if batch and not _cotemporal(windows, p.batch_max_gap_s):
+        return "batch_not_cotemporal"
     regs = [feats[m].traj_chunk_regularity for m in group if feats[m].traj_chunk_regularity is not None]
     reg = statistics.fmean(regs) if regs else 0.0
     md_classes = len(classes & set(MD_CLASS_NAMES))
     confidence = 0.3 * uniformity + 0.2 * md_classes / 6 + 0.2 * traj_frac + 0.15 * reg + 0.15 * purity
     if confidence < p.campaign_conf:
-        return None
+        return "campaign_conf"
     notes = []
+    if batch:
+        notes.append(f"batch of {len(group)} same-signature, one-submitter runs among the child dirs of {path}")
     if reg < p.chunk_regularity:
         notes.append(f"irregular chunk mtimes (regularity {reg:.2f} < {p.chunk_regularity}): "
                      "chunks may have been copied or touched after the run")
@@ -255,56 +314,188 @@ def _evaluate_root(inv: Inventory, feats: dict[str, DirFeatures], path: str, p: 
         engine=min(engines, key=lambda e: (-engines[e], e)), confidence=confidence, submitter_uid=submitter,
         t_start=min(f.mtime for f in trajs), t_end=max(f.mtime for f in trajs), notes=notes,
         traj_shas=frozenset(f.sha256 for f in trajs if f.sha256), first_ctime=min(f.ctime for f in trajs),
+        run_span_s=statistics.median(stop - start for start, stop in windows),
     )
+
+
+def _batches(inv: Inventory, feats: dict[str, DirFeatures], path: str,
+             p: Params) -> Iterable[tuple[list[str], float, tuple[str, ...]]]:
+    """Same-signature subsets of every template group of ``path``'s child dirs, largest group first.
+
+    Within a template group, the members whose MD signature holds TRAJ are
+    grouped by exact signature; the most common signature (ties: smallest)
+    is the batch. Yields ``(members, uniformity 1.0, signature)``.
+    """
+    groups: dict[str, list[str]] = {}
+    for c in inv.children(path):
+        if c.kind == "d":
+            groups.setdefault(feats[c.path].name_template, []).append(c.path)
+    for template in sorted(groups, key=lambda t: (-len(groups[t]), t)):
+        by_sig: dict[tuple[str, ...], list[str]] = {}
+        for m in groups[template]:
+            sig = feats[m].signature
+            if any(s.startswith("TRAJ:") for s in sig):
+                by_sig.setdefault(sig, []).append(m)
+        if by_sig:
+            sig = min(by_sig, key=lambda s: (-len(by_sig[s]), s))
+            if len(by_sig[sig]) >= p.min_candidates:
+                yield sorted(by_sig[sig]), 1.0, sig
+
+
+def _evaluate_root(inv: Inventory, feats: dict[str, DirFeatures], path: str, p: Params) -> _Root | str:
+    """Evaluate ``path`` as a campaign root; the name of the first failed gate on rejection.
+
+    The largest template group of the child dirs is tried first
+    (:func:`~campaign_detector.features.sibling_uniformity`). If it fails,
+    every same-signature batch of every template group is tried
+    (:func:`_batches`), so a uniform subset inside a heterogeneous group or
+    an outnumbered template group can still be a campaign.
+    """
+    if feats[path].n_dirs < p.min_candidates:
+        return "min_candidates"
+    group, uniformity, tfrac, mode_sig = sibling_uniformity(inv, feats, path)
+    first = _evaluate_group(inv, feats, path, group, uniformity, tfrac, mode_sig, p, batch=False)
+    if isinstance(first, _Root) or not p.batch_subsets:
+        return first
+    batch_gates = []
+    for members, uni, sig in _batches(inv, feats, path, p):
+        if members == group:
+            continue
+        found = _evaluate_group(inv, feats, path, members, uni, 1.0, sig, p, batch=True)
+        if isinstance(found, _Root):
+            return found
+        batch_gates.append(found)
+    return first + "".join(f"|batch:{g}" for g in batch_gates)
 
 
 def _is_replica_level(template: str) -> bool:
     return bool(set(tokens(template)) & REPLICA_WORDS)
 
 
-def _find_roots(inv: Inventory, feats: dict[str, DirFeatures], p: Params) -> list[_Root]:
+def _find_roots(inv: Inventory, feats: dict[str, DirFeatures], p: Params,
+                verdicts: dict[str, str] | None = None) -> list[_Root]:
     """Qualifying roots, deepest first; an outer root absorbs roots inside its members.
 
     Exception: when at least half of the members hold an inner root whose
     members are not a replica level (``rep#``, ``lambda_#.#``...), the
     members are campaigns in their own right (``batch1..batch4``) and the
-    outer directory is not a root.
+    outer directory is not a root. A replica-level root that no outer root
+    absorbs is dropped: replicas are repeats of one candidate, never
+    candidates. ``verdicts`` (if given) receives a gate name or ``"root"``
+    for every directory with at least ``min_candidates`` child dirs.
     """
     found: dict[str, _Root] = {}
+    verdict: dict[str, str] = {}
     for d in sorted(inv.dirs(), key=lambda e: (-feats[e.path].depth, e.path)):
         root = _evaluate_root(inv, feats, d.path, p)
-        if root is None:
+        if isinstance(root, str):
+            if feats[d.path].n_dirs >= p.min_candidates:
+                verdict[d.path] = root
             continue
         inner = [r for r in found.values() if any(is_within(r.path, m) for m in root.group)]
         campaigns = {m for m in root.group for r in inner
                      if is_within(r.path, m) and not _is_replica_level(r.template)}
         if 2 * len(campaigns) >= len(root.group):
+            verdict[d.path] = "members_are_campaigns"
             continue
         for r in inner:
             del found[r.path]
+            verdict[r.path] = f"absorbed_by:{d.path}"
         found[d.path] = root
-    return [found[k] for k in sorted(found)]
+        verdict[d.path] = "root"
+    out = []
+    for path in sorted(found):
+        if p.drop_replica_roots and _is_replica_level(found[path].template):
+            verdict[path] = "replica_level"
+        else:
+            out.append(found[path])
+    if verdicts is not None:
+        verdicts.update(verdict)
+    return out
 
 
-def _split_copies(roots: list[_Root], p: Params) -> tuple[list[_Root], list[_Root]]:
-    """Separate campaigns from later byte-identical copies of other campaigns.
+def _provenance(inv: Inventory, root: _Root) -> int:
+    """Signs that ``root`` is where the campaign was run: a submit script beside the runs (1) and a
+    non-member directory such as ``analysis/`` inside the root (1)."""
+    members = set(root.group)
+    kids = inv.children(root.path)
+    script = any(c.kind == "f" and (c.ext in _SCRIPT_EXTS or word_hits(c.stem, {"submit"})) for c in kids)
+    side_dir = any(c.kind == "d" and c.path not in members for c in kids)
+    return int(script) + int(side_dir)
 
-    A root is a copy when at least ``copy_overlap`` of its trajectory hashes
-    occur in another root whose chunks were created (ctime) earlier; the
-    original gets a note.
+
+def _split_copies(inv: Inventory, roots: list[_Root], p: Params) -> tuple[list[_Root], list[_Root]]:
+    """Separate campaigns from byte-identical copies of other campaigns.
+
+    ``r`` is a copy of ``other`` when at least ``copy_overlap`` of ``r``'s
+    trajectory hashes occur in ``other`` and ``other`` ranks first by, in
+    order: not tainted relative to the other root (``backup/``, ``old/``),
+    more provenance (:func:`_provenance`: a submit script, an analysis dir),
+    earlier chunk ctime. The original gets a note. Provenance before ctime
+    matters when a working copy was restored from its own mirror.
     """
+    def rank(r: _Root, other: _Root) -> tuple[bool, int, int]:
+        provenance = _provenance(inv, r) if p.mirror_provenance else 0
+        return is_tainted(r.path, anchor=other.path), -provenance, r.first_ctime
+
     copies: list[_Root] = []
     for r in roots:
         for other in roots:
-            if other is r or not r.traj_shas or other.first_ctime >= r.first_ctime:
+            if other is r or not r.traj_shas or other in copies:
                 continue
             overlap = len(r.traj_shas & other.traj_shas) / len(r.traj_shas)
-            if overlap >= p.copy_overlap:
+            if overlap >= p.copy_overlap and rank(other, r) < rank(r, other):
                 copies.append(r)
-                other.notes.append(f"ignored {r.path}: {overlap:.0%} of its trajectory chunks are later copies "
-                                   "of this campaign's (mirror/backup)")
+                other.notes.append(f"ignored {r.path}: {overlap:.0%} of its trajectory chunks are copies of this "
+                                   "campaign's (mirror/backup)")
                 break
     return [r for r in roots if r not in copies], copies
+
+
+def _campaign_roots(inv: Inventory, feats: dict[str, DirFeatures], p: Params,
+                    verdicts: dict[str, str] | None = None) -> tuple[list[_Root], list[_Root]]:
+    """Step 2: ``(campaign roots, mirror/backup copies)``.
+
+    Roots come from :func:`_find_roots`, copies are split off by
+    :func:`_split_copies`, then roots where no computation happened are
+    dropped (compute-happened gate): the median member run window (first MD
+    file to last trajectory chunk) is below ``min_run_span_s``, as in a bulk
+    copy of course kits (every file carries the copy instant) or a screen
+    that crashed minutes into its first chunk. Copies are split first so a
+    mirror whose chunk mtimes were not preserved is still recognised.
+    """
+    v: dict[str, str] = {}
+    roots, copies = _split_copies(inv, _find_roots(inv, feats, p, v), p)
+    for c in copies:
+        v[c.path] = "mirror_copy"
+    kept = []
+    for r in roots:
+        if r.run_span_s < p.min_run_span_s:
+            v[r.path] = "no_compute"
+        else:
+            kept.append(r)
+    if verdicts is not None:
+        verdicts.update(v)
+    return kept, copies
+
+
+def root_verdicts(inv: Inventory, *, params: Params | None = None) -> dict[str, str]:
+    """Why each would-be root is or is not a campaign: path -> ``"root"`` or the gate that rejected it.
+
+    Covers every directory with at least ``min_candidates`` child dirs.
+    Gate names: ``template_fraction``, ``uniformity``, ``min_md_classes``,
+    ``no_traj``, ``no_topology``, ``traj_byte_fraction``, ``uid_purity``,
+    ``campaign_conf``, ``min_candidates`` (template group too small),
+    ``members_are_campaigns``, ``absorbed_by:<outer root>``,
+    ``replica_level``, ``mirror_copy``, ``no_compute``. When the largest
+    template group fails and same-signature batches were tried too, their
+    gates follow as ``|batch:<gate>`` (``uniformity|batch:uid_purity``).
+    """
+    p = params or Params()
+    feats = all_features(inv, tz_offset_s=p.tz_offset_s)
+    out: dict[str, str] = {}
+    _campaign_roots(inv, feats, p, out)
+    return dict(sorted(out.items()))
 
 
 def _missing_ids(names: list[str]) -> list[str]:
@@ -521,7 +712,7 @@ def detect(inv: Inventory, *, params: Params | None = None, hooks: Hooks | None 
     p = params or Params()
     h = hooks or Hooks()
     feats = all_features(inv, tz_offset_s=p.tz_offset_s)
-    roots, copies = _split_copies(_find_roots(inv, feats, p), p)
+    roots, copies = _campaign_roots(inv, feats, p)
     ctx = _Context(inv, feats, roots, copies)
     reports = []
     for root in roots:
