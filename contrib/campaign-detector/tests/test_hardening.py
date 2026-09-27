@@ -164,3 +164,45 @@ def test_symlink_chains_are_followed_with_a_hop_limit() -> None:
     assert not detect(inv, params=_off(symlink_max_hops=9)).campaigns[0].picked()  # the chain has 10 hops
     (guard,) = detect(get("negative_pathological.symlink_pathology").build()).campaigns
     assert all(not c.evidence for c in guard.candidates)  # loops, dangling ends, never-run candidate
+
+
+# -- script cadence -------------------------------------------------------------
+
+_SUB = CampaignSpec()  # 24 amber runs, 10 x 6 h chunks, 15 min stagger, uid 2001
+
+
+def _last_chunk(i: int) -> int:
+    return _SUB.start + (i - 1) * _SUB.stagger_s + (_SUB.n_chunks - 1) * _SUB.chunk_interval_s
+
+
+def _submitter_dir(times: dict[str, int]) -> tuple[list[str], list[str]]:
+    """Campaign plus ``md/analysis_final`` written by the submitter at ``times`` (name -> mtime)."""
+    tb = TreeBuilder("/vol1")
+    md_campaign(tb, "/vol1/p/md", _SUB)
+    for name, t in times.items():
+        tb.file(f"/vol1/p/md/analysis_final/{name}", size=40_000, mtime=t, uid=_SUB.uid)
+    (rep,) = detect(tb.build()).campaigns
+    return sorted(rep.picked()), rep.notes
+
+
+T_END = _last_chunk(24)
+DAYS_LATER = at(20, 10)  # a weekday, 10:00
+
+
+def test_same_account_human_stays_curated() -> None:
+    picked, _ = _submitter_dir({"lig003_rmsd.png": DAYS_LATER, "notes.txt": DAYS_LATER + 1500,
+                                "lig011_rmsd.png": DAYS_LATER + 3000})
+    assert picked == ["run_lig003", "run_lig011"]
+
+
+@pytest.mark.parametrize("times, signal", [
+    ({"lig003_rmsd.png": T_END + 180, "notes.txt": T_END + 1500, "lig011_rmsd.png": T_END + 3000}, "first write"),
+    ({"lig003_rmsd.png": DAYS_LATER, "notes.txt": DAYS_LATER + 1, "lig011_rmsd.png": DAYS_LATER + 2},
+     "entries written within"),
+    ({f"lig{i:03d}_dG.png": _last_chunk(i) + 7200 for i in (22, 23, 24)} | {"notes.txt": DAYS_LATER},
+     "after their own run's last chunk"),
+])
+def test_script_shaped_submitter_dir_is_not_curated(times: dict[str, int], signal: str) -> None:
+    picked, notes = _submitter_dir(times)
+    assert picked == []
+    assert any("not curated" in n and signal in n for n in notes)

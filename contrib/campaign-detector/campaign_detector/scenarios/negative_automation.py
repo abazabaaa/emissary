@@ -365,16 +365,6 @@ CHOSEN_4 = ("run_lig003", "run_lig008", "run_lig012", "run_lig018", "run_lig021"
         "Saturday, under the submitter's own uid."
     ),
     expected=ExpectedOutcome.campaign_no_selection(ROOT_4, cids=CHOSEN_4),
-    known_gap=(
-        "curated_dir: 'analysis' scores exactly 3 of 6 (approval word, 67% derived, written after the "
-        "campaign) with owner == submitter and off-hours counting only as missed points, so 5 x 1.4 derived "
-        "picks follow. A night-owl human on the same account would still differ in: (a) write density: 15 "
-        "entries in 22 s (a scripted loop), where a person's writes are tens of seconds to minutes apart; "
-        "(b) onset lock: the first write is 180 s after t_end, the job's own end, where a person arrives "
-        "hours or days later; (c) a constant per-candidate template: exactly the same 3 suffixes per "
-        "candidate (child-name diversity 0.2). Rule for hardening: owner == submitter and "
-        "mtime_min - t_end < 1 h and burst rate > 1 file/10 s means pipeline, veto."
-    ),
 )
 def build_submission_postprocess() -> Inventory:
     tb = TreeBuilder(root="/data")
@@ -412,16 +402,6 @@ EPILOGUE_S = 180
         "last chunk, under the submitter's uid, interleaved with the still-running campaign."
     ),
     expected=ExpectedOutcome.campaign_no_selection(ROOT_4B, cids=CONVERGED_4B),
-    known_gap=(
-        "curated_dir: 'analysis' scores 3 of 6 (approval word, 67% derived, 100% working hours, because the "
-        "runs end on a Friday between 09:30 and 14:45) though owner == submitter and 12 of its 15 files "
-        "predate the campaign's end; derived ignores 4 of the 5 epilogues (mtime <= t_end) but accepts "
-        "run_lig024's, whose run finished last, so exactly that one is picked. Signal: per-candidate "
-        "offset lock: for every id-named file, mtime minus the named candidate's own last-chunk mtime is "
-        "the same 180 s (+0..2 s), which a human's session never shows; the files also interleave with "
-        "chunk writes. Rule for hardening: when owner == submitter and those offsets are constant "
-        "across >= 3 candidates, the dir is the job's own output, veto."
-    ),
 )
 def build_per_job_epilogue_daytime() -> Inventory:
     tb = TreeBuilder(root="/data")
