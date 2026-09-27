@@ -68,6 +68,12 @@ class Params:
     """A derived-extension file whose hash occurs in >= 2 candidates is boilerplate, not derived evidence."""
     symlink_max_hops: int = 40
     """Symlink chains are followed up to this many hops (loops stop earlier)."""
+    script_cadence: bool = True
+    """A submitter-owned dir written like a script (onset, density or offset lock) is never curated."""
+    script_onset_s: int = 3600
+    """Onset lock: a submitter-owned dir first written within this long after the last chunk is the job's."""
+    script_density_s: int = 10
+    """Density/offset lock tolerance: one entry per this many seconds, or offsets equal within it."""
 
 
 @dataclass
@@ -238,6 +244,7 @@ class _Root:
     traj_shas: frozenset[str]
     first_ctime: int
     run_span_s: float
+    run_ends: dict[str, int]
 
 
 _SCRIPT_EXTS = frozenset({".sh", ".bash", ".csh", ".zsh", ".slurm", ".sbatch", ".pbs", ".job", ".fmp", ".msj"})
@@ -296,7 +303,8 @@ def _evaluate_group(inv: Inventory, feats: dict[str, DirFeatures], path: str, gr
     if p.require_topology and "TOPO" not in classes and not any(
             c.kind == "f" and classify(c) == "TOPO" for c in inv.children(path)):
         return "no_topology"
-    windows = [w for w in (_run_window(inv, m) for m in group) if w is not None]
+    by_member = {m: _run_window(inv, m) for m in group}
+    windows = [w for w in by_member.values() if w is not None]
     if batch and not _cotemporal(windows, p.batch_max_gap_s):
         return "batch_not_cotemporal"
     regs = [feats[m].traj_chunk_regularity for m in group if feats[m].traj_chunk_regularity is not None]
@@ -321,6 +329,7 @@ def _evaluate_group(inv: Inventory, feats: dict[str, DirFeatures], path: str, gr
         t_start=min(f.mtime for f in trajs), t_end=max(f.mtime for f in trajs), notes=notes,
         traj_shas=frozenset(f.sha256 for f in trajs if f.sha256), first_ctime=min(f.ctime for f in trajs),
         run_span_s=statistics.median(stop - start for start, stop in windows),
+        run_ends={m: w[1] for m, w in by_member.items() if w is not None},
     )
 
 
@@ -552,8 +561,47 @@ class _Context:
         return _owner(path, self.all_candidates) is not None
 
 
-def _curated_dirs(ctx: _Context, root: _Root, p: Params, tainted: Callable[[str], bool]) -> list[CuratedDir]:
-    """Score untainted non-candidate dirs; files and symlinks both count as entries."""
+def _script_shaped(entries: list[Entry], root: _Root, p: Params) -> str | None:
+    """Why a directory written under the submitter's uid looks like the job's own output, else ``None``.
+
+    Signals (any one suffices): onset lock (first write no later than
+    ``script_onset_s`` after the campaign's last chunk, or before it), write
+    density (every entry written within ``script_density_s`` per entry),
+    and per-candidate offset lock (id-named files of >= 3 candidates land at
+    the same offset, within ``script_density_s``, from each candidate's own
+    last chunk). A person working in the same account arrives later and
+    writes by hand. Hard links are ignored: their mtime and uid belong to
+    the linked inode, not to the act of linking.
+    """
+    entries = [e for e in entries if e.kind == "l" or e.nlink == 1]
+    if not entries:
+        return None
+    mtimes = sorted(e.mtime for e in entries)
+    if mtimes[0] <= root.t_end + p.script_onset_s:
+        return f"first write {mtimes[0] - root.t_end:+d} s from the campaign's last chunk"
+    if len(mtimes) >= 3 and mtimes[-1] - mtimes[0] <= p.script_density_s * (len(mtimes) - 1):
+        return f"{len(mtimes)} entries written within {mtimes[-1] - mtimes[0]} s"
+    ends = {posixpath.basename(m): t for m, t in root.run_ends.items()}
+    by_token = {tok: cid for cid in ends for tok in id_tokens(cid)}
+    offsets: dict[str, int] = {}
+    for e in entries:
+        named = {by_token[t] for t in id_tokens(e.name) if t in by_token}
+        if len(named) == 1:
+            cid = named.pop()
+            offsets[cid] = min(offsets.get(cid, e.mtime - ends[cid]), e.mtime - ends[cid])
+    if len(offsets) >= 3 and max(offsets.values()) - min(offsets.values()) <= p.script_density_s:
+        return f"id-named files sit {min(offsets.values())} s after their own run's last chunk"
+    return None
+
+
+def _curated_dirs(ctx: _Context, root: _Root, p: Params, tainted: Callable[[str], bool],
+                  notes: list[str] | None = None) -> list[CuratedDir]:
+    """Score untainted non-candidate dirs; files and symlinks both count as entries.
+
+    With ``script_cadence``, a directory owned by the submitter that is
+    script-shaped (:func:`_script_shaped`) is never curated; ``notes``
+    receives why.
+    """
     root_parent = posixpath.dirname(root.path)
     out = []
     for path, f in ctx.feats.items():
@@ -582,8 +630,14 @@ def _curated_dirs(ctx: _Context, root: _Root, p: Params, tainted: Callable[[str]
             reasons.append(f"owner uid {owner} is not the submitter")
         if not f.name_is_templated and f.child_name_diversity >= 0.5:
             reasons.append("irregular hand-made names")
-        if len(reasons) >= p.curated_score:
-            out.append(CuratedDir(path=path, uid=owner, score=len(reasons), n_files=len(entries), reasons=reasons))
+        if len(reasons) < p.curated_score:
+            continue
+        script = _script_shaped(entries, root, p) if p.script_cadence and owner == root.submitter_uid else None
+        if script is not None:
+            if notes is not None:
+                notes.append(f"{path} is not curated: written by the submitter like a script ({script})")
+            continue
+        out.append(CuratedDir(path=path, uid=owner, score=len(reasons), n_files=len(entries), reasons=reasons))
     return out
 
 
@@ -774,8 +828,8 @@ def detect(inv: Inventory, *, params: Params | None = None, hooks: Hooks | None 
     reports = []
     for root in roots:
         tainted = functools.cache(functools.partial(is_tainted, anchor=root.path))
-        curated = _curated_dirs(ctx, root, p, tainted)
         notes = list(root.notes)
+        curated = _curated_dirs(ctx, root, p, tainted, notes)
         if not curated:
             notes.append("no curated directories found")
         report = CampaignReport(
