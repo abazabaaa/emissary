@@ -159,11 +159,6 @@ _, LIB_WD = _monday(-48)
                 "compounds (PIM1 lig007, lig019) whose tokens collide with HSP90's run_lig###; strongest cue: "
                 "tree distance on the same volume, with no hash or link into the campaign.",
     expected=ExpectedOutcome.campaign_no_selection(HSP90_ROOT, [f"run_lig{i:03d}" for i in range(1, 31)]),
-    known_gap="derived: derived evidence is taken from every curated dir in the inventory, so PIM1_lig007/lig019 "
-              "notes in /vol7/library/best_papers_final credit HSP90's run_lig007/run_lig019; locality rule: "
-              "derived counts only from a curated dir on the campaign's volume and within the campaign root's "
-              "parent (/vol7/groups/modeling/HSP90_2018), or one that also holds copy/hardlink/symlink "
-              "evidence into the campaign",
 )
 def build_library_beside_unrelated_md() -> Inventory:
     """HSP90 (2018) under ``/vol7/groups/modeling``; a PIM1 reading library (2019) under ``/vol7/library``."""
@@ -217,11 +212,6 @@ later ABL register compounds that were never run, and only KDR has candidates by
         picked={KDR_ROOT: frozenset(), ABL_ROOT: frozenset()},
         present={KDR_ROOT: frozenset({"run_lig029", "run_lig033"}), ABL_ROOT: frozenset({"run_lig012"})},
     ),
-    known_gap="derived: id-token matching ignores where the curated dir is, so lig029_dock_compare.png and "
-              "lig033_next_batch_note.txt in /vol5/archive/ABL_2014/md/analysis credit KDR's run_lig029/"
-              "run_lig033 on /vol2; locality rule: derived counts only from a curated dir on the campaign's "
-              "volume and within the campaign root's parent, or one that also holds copy/hardlink/symlink "
-              "evidence into the campaign",
 )
 def build_stem_collision() -> Inventory:
     """ABL's analysis/ is real and human-curated but only plans ABL's next batch.
@@ -388,11 +378,6 @@ def build_graduation_false_friend() -> Inventory:
                 "counted twice (derived 0.7 + graduation 0.5 = 1.2) with no hash, link or content connection "
                 "to JAK2; strongest cue: both signals derive from the same off-volume token.",
     expected=ExpectedOutcome.campaign_no_selection(JAK2_ROOT, JAK2_IDS),
-    known_gap="derived: lig012_summary.xlsx in the curated off-volume folder /vol9/programs/BTK_2019/"
-              "lig012_series adds 0.7 to the 0.5 graduation from the folder's own name, picking JAK2's "
-              "run_lig012 on a coincidence; locality rule: derived counts only from a curated dir on the "
-              "campaign's volume and within the campaign root's parent, or one that also holds copy/hardlink/"
-              "symlink evidence into the campaign (graduation alone then leaves lig012 unknown)",
 )
 def build_graduation_false_friend_summary() -> Inventory:
     """As :func:`build_graduation_false_friend` plus ``lig012_summary.xlsx`` inside the programme folder."""

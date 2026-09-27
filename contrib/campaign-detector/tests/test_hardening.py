@@ -131,3 +131,36 @@ def test_batch_subset_needs_one_submitter_and_one_time_window() -> None:
     assert root_verdicts(apart)["/vol2/pool"].endswith("batch:batch_not_cotemporal")
     many_hands = _pool_with_runs([at(100, 3) + 900 * k for k in range(4)], [2101, 2102, 2103, 2104]).build()
     assert root_verdicts(many_hands)["/vol2/pool"].endswith("batch:uid_purity")
+
+
+# -- evidence rules -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["negative_mismatched.stem_collision",
+                                  "negative_mismatched.library_beside_unrelated_md",
+                                  "negative_mismatched.graduation_false_friend_summary"])
+def test_derived_locality(name: str) -> None:
+    inv = get(name).build()
+    assert not any(r.picked() for r in detect(inv).campaigns)
+    assert any(r.picked() for r in detect(inv, params=_off(derived_locality=False)).campaigns)
+
+
+def test_graduation_alone_stays_unknown_after_locality() -> None:
+    (rep,) = detect(get("negative_mismatched.graduation_false_friend_summary").build()).campaigns
+    lig = next(c for c in rep.candidates if c.id == "run_lig012")
+    assert [e.kind for e in lig.evidence] == ["graduation"] and lig.label == "unknown"
+
+
+def test_derived_boilerplate_is_not_evidence() -> None:
+    inv = get("negative_automation.reference_run_protocol_bundle").build()
+    assert not detect(inv).campaigns[0].picked()
+    assert detect(inv, params=_off(derived_uniqueness=False)).campaigns[0].picked() == {"run_lig001"}
+
+
+def test_symlink_chains_are_followed_with_a_hop_limit() -> None:
+    inv = get("positive_pathological_links.symlink_chain_pick").build()
+    (rep,) = detect(inv).campaigns
+    assert rep.picked() == {"run_cpd003"}
+    assert not detect(inv, params=_off(symlink_max_hops=9)).campaigns[0].picked()  # the chain has 10 hops
+    (guard,) = detect(get("negative_pathological.symlink_pathology").build()).campaigns
+    assert all(not c.evidence for c in guard.candidates)  # loops, dangling ends, never-run candidate

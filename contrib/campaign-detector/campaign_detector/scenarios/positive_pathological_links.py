@@ -77,7 +77,6 @@ _GPCR_CANDS = _ids("run_cpd{:03d}", range(1, 7))
         "final target lies inside exactly one candidate."
     ),
     expected=exact(GPCR_ROOT, ["run_cpd003"], [c for c in _GPCR_CANDS if c != "run_cpd003"]),
-    known_gap="symlink: chains are resolved one hop only; a chain ending inside exactly one candidate should count",
 )
 def build_symlink_chain_pick() -> Inventory:
     """The writer's GPCR campaign with a clean 10-hop chain from analysis/ into ``run_cpd003``."""
