@@ -42,3 +42,10 @@ megalinter-reports
 
 # Maven stuff
 pom.xml.versionsBackup
+# Claude Code session state (agent worktrees, plans)
+.claude/worktrees/
+.claude/plans/
+
+# Local planning and strategy notes: kept beside the code, never committed
+/plans/
+/docs/strategy/
