@@ -62,6 +62,12 @@ class Params:
     """Drop a replica-level root (``rep#``, ``lambda_#``) that no outer campaign absorbs."""
     mirror_provenance: bool = True
     """Mirror gate: taint and provenance (submit script, analysis dir) outrank ctime."""
+    derived_locality: bool = True
+    """Derived evidence counts only from a curated dir local to the campaign or holding link evidence into it."""
+    derived_uniqueness: bool = True
+    """A derived-extension file whose hash occurs in >= 2 candidates is boilerplate, not derived evidence."""
+    symlink_max_hops: int = 40
+    """Symlink chains are followed up to this many hops (loops stop earlier)."""
 
 
 @dataclass
@@ -591,8 +597,53 @@ def _unique_owner(matches: Iterable[Entry], cands: dict[str, str]) -> tuple[str,
     return next(iter(owners.items())) if len(owners) == 1 else None
 
 
-def _builtin_evidence(ctx: _Context, root: _Root, curated: list[CuratedDir],
-                      tainted: Callable[[str], bool]) -> list[Evidence]:
+def _volume(path: str) -> str:
+    """First path component: the inventory has no device column, so this stands for the volume."""
+    return path.split("/", 2)[1] if path != "/" else ""
+
+
+def _is_local(path: str, root: _Root) -> bool:
+    """True when ``path`` is on the campaign's volume and within the root's parent (locality rule)."""
+    return _volume(path) == _volume(root.path) and is_within(path, posixpath.dirname(root.path))
+
+
+def _follow_symlink(inv: Inventory, link: Entry, cands: dict[str, str], max_hops: int) -> tuple[str, str] | None:
+    """``(candidate id, target path)`` for the first path along ``link``'s chain inside a candidate.
+
+    Each hop resolves the stored target against the link's directory; the
+    walk continues while the target is itself a symlink in the inventory, up
+    to ``max_hops`` hops, and gives up on a loop. A dangling or foreign end
+    yields ``None``.
+    """
+    seen = {link.path}
+    cur = link
+    for _ in range(max_hops):
+        tgt = cur.resolved_target()
+        if tgt is None:
+            return None
+        cid = _owner(tgt, cands)
+        if cid is not None:
+            return cid, tgt
+        nxt = inv.by_path.get(tgt)
+        if nxt is None or nxt.kind != "l" or nxt.path in seen:
+            return None
+        seen.add(nxt.path)
+        cur = nxt
+    return None
+
+
+def _builtin_evidence(ctx: _Context, root: _Root, curated: list[CuratedDir], tainted: Callable[[str], bool],
+                      p: Params) -> list[Evidence]:
+    """Evidence from the direct children of curated dirs, plus graduation from later dirs.
+
+    Per curated dir: ``hardlink``/``copy_out`` (the file's inode or hash
+    falls under exactly one candidate), ``symlink`` (the chain reaches
+    exactly one candidate) and ``derived`` (an id-named artifact written
+    after the campaign). Derived evidence is skipped for boilerplate (the
+    file's hash occurs in >= 2 candidates) and, with ``derived_locality``,
+    for a curated dir that is neither local to the campaign (same volume,
+    within the root's parent) nor a source of link evidence into it.
+    """
     inv = ctx.inv
     cands = {m: posixpath.basename(m) for m in root.group}
     by_token: dict[str, list[str]] = {}
@@ -602,6 +653,8 @@ def _builtin_evidence(ctx: _Context, root: _Root, curated: list[CuratedDir],
 
     out: list[Evidence] = []
     for cd in curated:
+        links: list[Evidence] = []
+        derived: list[Evidence] = []
         for e in inv.children(cd.path):
             if tainted(e.path):
                 continue
@@ -610,20 +663,24 @@ def _builtin_evidence(ctx: _Context, root: _Root, curated: list[CuratedDir],
                 twins = [x for x in inv.by_inode.get(e.inode, ()) if x.path != e.path and x.kind == "f"
                          and (x.size, x.mtime, x.uid) == (e.size, e.mtime, e.uid)] if e.nlink > 1 else []
                 hard = _unique_owner(twins, cands)
-                same = _unique_owner(inv.by_sha.get(e.sha256, ()), cands) if e.sha256 else None
+                same_sha = inv.by_sha.get(e.sha256, ()) if e.sha256 else ()
+                same = _unique_owner(same_sha, cands)
                 if hard:
-                    out.append(Evidence("hardlink", hard[0], e.path, hard[1], EVIDENCE_WEIGHTS["hardlink"]))
+                    links.append(Evidence("hardlink", hard[0], e.path, hard[1], EVIDENCE_WEIGHTS["hardlink"]))
                 elif same:
-                    out.append(Evidence("copy_out", same[0], e.path, same[1], EVIDENCE_WEIGHTS["copy_out"]))
-                if e.ext in DERIVED_EXTS and e.mtime > root.t_end:
+                    links.append(Evidence("copy_out", same[0], e.path, same[1], EVIDENCE_WEIGHTS["copy_out"]))
+                boilerplate = len({_owner(x.path, cands) for x in same_sha} - {None}) >= 2
+                if e.ext in DERIVED_EXTS and e.mtime > root.t_end and not (p.derived_uniqueness and boilerplate):
                     hits = sorted({m for tok in id_tokens(e.name) for m in by_token.get(tok, ())})
-                    out.extend(Evidence("derived", cands[m], e.path, m, EVIDENCE_WEIGHTS["derived"],
-                                        "candidate id in artifact name") for m in hits)
+                    derived.extend(Evidence("derived", cands[m], e.path, m, EVIDENCE_WEIGHTS["derived"],
+                                            "candidate id in artifact name") for m in hits)
             elif e.kind == "l":
-                tgt = e.resolved_target()
-                cid = _owner(tgt, cands) if tgt else None
-                if cid is not None:
-                    out.append(Evidence("symlink", cid, e.path, str(tgt), EVIDENCE_WEIGHTS["symlink"]))
+                hit = _follow_symlink(inv, e, cands, p.symlink_max_hops)
+                if hit is not None:
+                    links.append(Evidence("symlink", hit[0], e.path, hit[1], EVIDENCE_WEIGHTS["symlink"]))
+        out.extend(links)
+        if not p.derived_locality or links or _is_local(cd.path, root):
+            out.extend(derived)
     for d in ctx.outside_roots:
         if d.mtime <= root.t_end or tainted(d.path):
             continue
@@ -730,7 +787,7 @@ def detect(inv: Inventory, *, params: Params | None = None, hooks: Hooks | None 
             selection_confidence=0.0, notes=notes,
         )
         by_id = {c.id: c for c in report.candidates}
-        evidence = _builtin_evidence(ctx, root, curated, tainted)
+        evidence = _builtin_evidence(ctx, root, curated, tainted, p)
         for hook in (h.text_mentions, h.graduation):
             evidence += _check_hook_evidence(hook(inv, report), by_id, root.path)
         unique: dict[tuple[str, str, str], Evidence] = {}

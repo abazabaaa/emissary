@@ -325,14 +325,6 @@ WORKDAY_3B = workday(92)
         "the first run."
     ),
     expected=ExpectedOutcome.campaign_no_selection(ROOT_3B, cids=ALL_24),
-    known_gap=(
-        "derived: derived evidence checks only the id token in the name and mtime > t_end, not the file's "
-        "sha, so 'lig001_README.md' (a .md copy of README.md, byte-identical in all 24 candidates) scores "
-        "0.7 for run_lig001, while copy_out on the same file is correctly rejected by the uniqueness gate. "
-        "Signal: a derived-extension file whose sha256 occurs in >= 2 candidates is boilerplate, not an "
-        "artifact about one candidate; apply the uniqueness gate to derived too. Supporting signal: the "
-        "named candidate is the lowest index (the script's reference run)."
-    ),
 )
 def build_reference_run_protocol_bundle() -> Inventory:
     tb = TreeBuilder(root="/data")
