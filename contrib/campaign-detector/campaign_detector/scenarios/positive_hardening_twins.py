@@ -6,15 +6,15 @@ reject. The twins were described by the adversarial reviewers of groups B3
 and B5 (module docstrings of :mod:`negative_copies` and
 :mod:`negative_mismatched`) or follow from a rule's own guard:
 
-=================================  ===========================================  =================================
-twin                               rule it guards                               negative on the other side
-=================================  ===========================================  =================================
-``human_shaped_70``                machine-shaped 50-80% band, completed runs   ``negative_copies.coverage_cap_70``
-``mirror_snapshot_with_picks``     mirror provenance, derived locality          ``negative_copies.mirror_backup``
-``stem_collision_with_copy``       derived locality (b): link evidence          ``negative_mismatched.stem_collision``
-``same_account_analysis``          script cadence (owner == submitter)          ``negative_automation.submission_postprocess``
-``desmond_trj_fep``                Desmond ``<job>_trj/frame*`` as TRAJ          (none: a real layout, now visible)
-=================================  ===========================================  =================================
+==============================  ======================================  ==========================================
+twin                            rule it guards                          negative on the other side
+==============================  ======================================  ==========================================
+``human_shaped_70``             machine-shaped band, completed runs     ``negative_copies.coverage_cap_70``
+``mirror_snapshot_with_picks``  mirror provenance, derived locality     ``negative_copies.mirror_backup``
+``stem_collision_with_copy``    derived locality by link evidence       ``negative_mismatched.stem_collision``
+``same_account_analysis``       script cadence (owner == submitter)     B4 ``submission_postprocess``, ``per_job_*``
+``desmond_trj_fep``             ``<job>_trj/frame*`` is TRAJ            (none: a real layout, now visible)
+==============================  ======================================  ==========================================
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from .negative_mismatched import ABL_ROOT, ABL_SPEC, ABL_WD, ANALYST, KDR_ROOT, 
 # 1. The human-shaped 70% copy-out (B3's twin of coverage_cap_70).
 # --------------------------------------------------------------------------
 
-H70_PARENT = "/vol6/hts/COVID_2019c"
+H70_PARENT = "/vol6/hts/COVID_2018c"
 H70_ROOT = H70_PARENT + "/dock"
 H70_SHORTLIST = H70_PARENT + "/shortlist"
 H70_ANALYST = 3711
@@ -147,8 +147,8 @@ def build_stem_collision_with_copy() -> Inventory:
 
 OWN_ROOT = "/vol4/projects/BTK_2017/md"
 OWN_SPEC = CampaignSpec(engine="amber", n_candidates=20, candidate_fmt="run_lig{:03d}", n_chunks=12, uid=2301,
-                        start=at(-1100, 3))
-OWN_WD = 5 * (-1100 // 7) + 9
+                        start=at(-1106, 3))
+OWN_WD = 5 * (-1106 // 7) + 10
 """Two weeks after the campaign ends."""
 
 
@@ -179,13 +179,13 @@ def build_same_account_analysis() -> Inventory:
 TRJ_ROOT = "/vol8/programs/PIM1_2016/fep_plus"
 TRJ_SPEC = CampaignSpec(
     engine="desmond_trj", n_candidates=16, candidate_fmt="lig{:03d}", inner_fmt="lambda_{:.2f}", n_inner=4,
-    n_chunks=8, chunk_interval_s=3 * 3600, chunk_size=150_000_000, uid=2410, start=at(-560, 4), stagger_s=600,
+    n_chunks=8, chunk_interval_s=3 * 3600, chunk_size=150_000_000, uid=2410, start=at(-1589, 4), stagger_s=600,
     boilerplate=("md.cfg", "md.msj"),
 )
 """16 ligands x 4 lambda windows, each ``md-in.cms``, ``md.msj``, ``md.cfg``, ``md_trj/frame001..008``,
 ``md_trj/clickme.dtr``, ``md-out.cms``, ``md.ene``, ``md.log``, ``md.cpt`` and ``job.o<id>``."""
 TRJ_ANALYST = 3412
-TRJ_WD = 5 * (-560 // 7) + 12
+TRJ_WD = 5 * (-1589 // 7) + 12
 
 
 @register(
