@@ -87,3 +87,11 @@ def test_tsv_stream_round_trip_and_rejects_tabs() -> None:
     bad = Inventory([_d("/", 1), Entry("/a\tb", "f", 1, 1, 1, 1, 1, 2, 1)])
     with pytest.raises(ValueError):
         bad.to_tsv(io.StringIO())
+
+
+def test_carriage_return_in_a_name_round_trips(tmp_path) -> None:
+    inv = Inventory([_d("/", 1), _d("/a", 2), Entry("/a/odd\rname.nc", "f", 3, 10, 10, 7, 7, 3, 1)])
+    dst = tmp_path / "cr.tsv"
+    inv.to_tsv(dst)
+    back = Inventory.from_tsv(dst)
+    assert "/a/odd\rname.nc" in back and len(back) == 3
