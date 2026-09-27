@@ -306,8 +306,6 @@ S2_ANALYST = 3205
                 "the LATER ctimes; strongest cue: provenance (submit script and human analysis live only "
                 "beside the working copy), which contradicts the ctime order",
     expected=ExpectedOutcome.campaign_no_selection(S2_ROOT, cids=_names(S2_SPEC)),
-    known_gap="campaign_root: mirror gate decides by ctime only; the restored working copy (submit_all.sh, "
-              "analysis/) has later ctimes than its DR mirror, so the mirror is reported as the campaign",
     name="rsync_mirror",
 )
 def build_rsync_mirror() -> Inventory:

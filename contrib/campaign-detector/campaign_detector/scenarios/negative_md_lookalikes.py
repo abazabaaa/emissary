@@ -188,10 +188,6 @@ _COPY_TIME = at(97, 21, 14)
         "single owner, perfect templating and 0.67 trajectory bytes clear every gate."
     ),
     expected=ExpectedOutcome.no_campaign(),
-    known_gap=(
-        "campaign_root: one-uid bulk copy of course kits with real TRAJ bytes passes every gate; needs a "
-        "compute-happened signal (chunk cadence, log size, per-run timestamps)"
-    ),
 )
 def build_md_course_single_student() -> Inventory:
     """The same course kits, copied once by one student; the original course is not on this volume."""
@@ -291,11 +287,6 @@ _PARTIAL_ROOT = "/scratch/awad/EGFR_prescreen_v2/runs"
         "writes, invisible to a byte fraction measured on a tree that is itself tiny (0.62)."
     ),
     expected=ExpectedOutcome.no_campaign(),
-    known_gap=(
-        "campaign_root: runs that crash minutes into their first chunk pass every gate because "
-        "traj_byte_fraction is relative to an equally tiny tree; needs an absolute trajectory volume or "
-        "run-duration floor (chunks per run, t_end - t_start)"
-    ),
 )
 def build_failed_screen_partial() -> Inventory:
     """A ligand screen whose jobs each wrote a few MB of trajectory and then crashed."""

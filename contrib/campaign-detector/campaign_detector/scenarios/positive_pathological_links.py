@@ -216,7 +216,6 @@ def _pool(tb: TreeBuilder, root: str, md_fmt: str, md_idx: Iterable[int], misc_i
         "cue: a same-signature, single-submitter, co-temporal subset of >=4 siblings."
     ),
     expected=exact(POOL_ROOT, ["proj_002"], ["proj_001", "proj_003", "proj_004"]),
-    known_gap="campaign_root: uniform subset inside a heterogeneous template group is not isolated",
 )
 def build_numbered_siblings_md_subset() -> Inventory:
     """The writer's original ``numbered_siblings_heterogeneous`` tree plus a copy-out of ``proj_002``."""
@@ -236,8 +235,6 @@ MINORITY_ROOT = "/vol9/groupshare/projects"
         "template group of >=4 uniform runs, however outnumbered."
     ),
     expected=exact(MINORITY_ROOT, ["proj_032_md"], ["proj_031_md", "proj_033_md", "proj_034_md"]),
-    known_gap=("campaign_root: only the largest template group of a parent is evaluated, so a minority group "
-               "of uniform runs is never scored (and would fail template_fraction=0.6 if it were)"),
 )
 def build_minority_template_campaign() -> Inventory:
     """34 children: proj_001..proj_030 (non-MD) and proj_031_md..proj_034_md (one AMBER batch)."""
